@@ -41,6 +41,10 @@ task1_entity_extraction/output/uploads/
 task1_entity_extraction/output/upload_*
 task1_entity_extraction/output/progress.txt
 
+# 验证集：其「原文摘录」sheet 内嵌命题方原始公告全文（约 40 万字），
+# 属赛事数据内容，不外传。可由 build_validation_set.py 随时重新生成。
+task1_entity_extraction/output/validation_set/
+
 # ============================================================
 # 编辑器 / 系统
 # ============================================================
