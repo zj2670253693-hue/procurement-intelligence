@@ -1,0 +1,174 @@
+/* ============================================================
+   全局设计规范
+   统一色板、圆角、阴影与 Element Plus 主题变量
+   ============================================================ */
+
+:root {
+  /* 主色（政企蓝） */
+  --c-primary: #2563eb;
+  --c-primary-dark: #1d4ed8;
+  --c-primary-soft: #eff6ff;
+
+  /* 中性色 */
+  --c-bg: #f4f6fa;
+  --c-surface: #ffffff;
+  --c-surface-2: #fafbfc;
+  --c-border: #e6e9f0;
+  --c-border-strong: #d6dbe6;
+
+  /* 文本 */
+  --c-text: #1f2937;
+  --c-text-2: #5b6474;
+  --c-text-3: #9aa3b2;
+
+  /* 语义色 */
+  --c-success: #10b981;
+  --c-warning: #f59e0b;
+  --c-danger: #ef4444;
+  --c-info: #64748b;
+
+  /* 侧边栏 */
+  --c-aside: #0f172a;
+  --c-aside-2: #1a2437;
+  --c-aside-text: rgba(255, 255, 255, 0.68);
+  --c-aside-text-active: #ffffff;
+
+  /* 尺寸 */
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 14px;
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.04);
+  --shadow: 0 4px 14px rgba(16, 24, 40, 0.07);
+  --shadow-lg: 0 12px 32px rgba(16, 24, 40, 0.12);
+  --aside-width: 248px;
+  --header-height: 60px;
+}
+
+/* ---------- Element Plus 主题变量改写 ---------- */
+:root {
+  --el-color-primary: var(--c-primary);
+  --el-color-success: var(--c-success);
+  --el-color-warning: var(--c-warning);
+  --el-color-danger: var(--c-danger);
+  --el-color-info: var(--c-info);
+  --el-border-radius-base: var(--radius-sm);
+  --el-border-color-lighter: var(--c-border);
+  --el-text-color-regular: var(--c-text-2);
+  --el-text-color-primary: var(--c-text);
+  --el-font-size-base: 13px;
+}
+
+/* ---------- 基础重置 ---------- */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  background-color: var(--c-bg);
+  color: var(--c-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 细滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd2dd;
+  border-radius: 8px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #b3bcca;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ---------- 通用卡片 ---------- */
+.el-card {
+  border: 1px solid var(--c-border) !important;
+  border-radius: var(--radius) !important;
+  box-shadow: var(--shadow-sm) !important;
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.el-card__header {
+  padding: 14px 18px !important;
+  border-bottom: 1px solid var(--c-border) !important;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.el-card__body {
+  padding: 18px !important;
+}
+
+/* ---------- 表格 ---------- */
+.el-table {
+  --el-table-header-bg-color: var(--c-surface-2);
+  --el-table-border-color: var(--c-border);
+  --el-table-row-hover-bg-color: var(--c-primary-soft);
+  font-size: 13px;
+}
+
+.el-table th.el-table__cell {
+  font-weight: 600 !important;
+  color: var(--c-text) !important;
+}
+
+.el-table .el-table__cell {
+  padding: 9px 0;
+}
+
+/* 空值占位（很多字段本就没有值，留白会显得像坏了） */
+.cell-empty {
+  color: var(--c-text-3);
+}
+
+/* ---------- 通用工具类 ---------- */
+.page-hint {
+  font-size: 12px;
+  color: var(--c-text-3);
+  font-weight: 400;
+}
+
+.mt-16 {
+  margin-top: 16px;
+}
+
+.mt-24 {
+  margin-top: 24px;
+}
+
+.ml-8 {
+  margin-left: 8px;
+}
+
+/* 页面顶部标题区 */
+.page-title {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
+.page-desc {
+  margin-top: 4px;
+  font-size: 12.5px;
+  color: var(--c-text-3);
+}

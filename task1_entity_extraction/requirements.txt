@@ -1,0 +1,35 @@
+# 任务一：实体识别与自动化提取 - 依赖包
+# Python >= 3.10
+
+# HTML 解析
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+requests>=2.31.0
+
+# 附件解析
+python-docx>=1.1.0
+openpyxl>=3.1.0
+pdfplumber>=0.10.0
+PyPDF2>=3.0.0
+python-pptx>=0.6.21
+
+# 数据处理
+pandas>=2.0.0
+numpy>=1.24.0
+
+# LLM API
+openai>=1.0.0
+httpx>=0.24.0
+
+# 数据库
+pymysql>=1.1.0
+
+# Web 服务（任务三平台后端）
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.9
+
+# 工具
+tqdm>=4.65.0
+python-dotenv>=1.0.0
+pydantic>=2.0.0

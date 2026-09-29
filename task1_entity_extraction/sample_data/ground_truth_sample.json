@@ -1,0 +1,43 @@
+[
+  {
+    "announcement_id": "sample_announcement",
+    "entities": [
+      {
+        "product_name": "应用服务器",
+        "category": "A02010103 服务器",
+        "brand": "华为",
+        "spec_model": "2288H V5",
+        "unit_price": "35,000.00",
+        "quantity": "10台",
+        "total_price": "350,000.00"
+      },
+      {
+        "product_name": "数据库服务器",
+        "category": "A02010103 服务器",
+        "brand": "华为",
+        "spec_model": "2288H V5",
+        "unit_price": "58,000.00",
+        "quantity": "5台",
+        "total_price": "290,000.00"
+      },
+      {
+        "product_name": "核心交换机",
+        "category": "A02010202 交换设备",
+        "brand": "锐捷",
+        "spec_model": "RG-S6510-4C",
+        "unit_price": "42,000.00",
+        "quantity": "2台",
+        "total_price": "84,000.00"
+      },
+      {
+        "product_name": "HIS系统升级服务",
+        "category": "C0201 软件开发服务",
+        "brand": "联通数智",
+        "spec_model": "V3.0",
+        "unit_price": "8,556,000.00",
+        "quantity": "1项",
+        "total_price": "8,556,000.00"
+      }
+    ]
+  }
+]
