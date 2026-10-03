@@ -11,7 +11,7 @@ import httpx
 from openai import OpenAI
 
 import config
-from models.schemas import ExtractedEntity, ExtractionResult
+from models.schemas import ExtractedEntity, ExtractionResult, deduplicate_entities
 from extractor.prompts import build_extraction_prompt, build_extra_info_prompt
 
 
@@ -56,7 +56,7 @@ class LLMExtractor:
             result.raw_response = response_text
 
             # 解析 JSON
-            entities = self._parse_entities(response_text)
+            entities = self._deduplicate_entities(self._parse_entities(response_text))
             result.entities = entities
 
             if not entities:
@@ -131,6 +131,16 @@ class LLMExtractor:
                 entities.append(entity)
 
         return entities
+
+    @staticmethod
+    def _deduplicate_entities(entities: list[ExtractedEntity]) -> list[ExtractedEntity]:
+        """
+        删除模型因“HTML 正文 + 附件重复出现同一清单”产生的完全重复行。
+
+        这里只合并七个字段归一化后完全一致的记录，避免把同名但属于不同
+        包件、数量或价格不同的真实标的物误合并。
+        """
+        return deduplicate_entities(entities)
 
     def _parse_json_response(self, response_text: str) -> Optional[Dict]:
         """从 LLM 响应文本中解析 JSON（处理 markdown 代码块等情况）"""

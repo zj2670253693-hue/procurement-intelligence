@@ -41,7 +41,6 @@ class EntityExtractionPipeline:
         max_workers: int = 8,
     ):
         self.html_parser = HTMLAnnouncementParser()
-        self.attachment_parser = AttachmentParser()
         self.extractor = LLMExtractor(
             provider=llm_provider,
             api_key=api_key,
@@ -86,7 +85,8 @@ class EntityExtractionPipeline:
             self.repository = None
 
     def process_directory(self, dir_path: str, skip_ids: set = None,
-                          progress_callback=None) -> List[ExtractionResult]:
+                          progress_callback=None,
+                          checkpoint_results: List[ExtractionResult] = None) -> List[ExtractionResult]:
         """
         批量处理一个目录下的所有公告（并发处理）
         目录结构：每个公告一个子目录，包含 .html 文件和附件 zip（如有）
@@ -95,6 +95,7 @@ class EntityExtractionPipeline:
             skip_ids: 需要跳过的公告 ID 集合（用于断点续跑）
             progress_callback: 可选回调 fn(done, total, success_count, result)，
                                供 API 层上报任务进度
+            checkpoint_results: 已加载的历史成功结果；写检查点时与本轮结果合并
         """
         import sys
         dir_path = Path(dir_path)
@@ -102,7 +103,10 @@ class EntityExtractionPipeline:
             raise FileNotFoundError(f"目录不存在: {dir_path}")
 
         # 查找所有 HTML 文件
-        html_files = list(dir_path.rglob("*.html")) + list(dir_path.rglob("*.htm"))
+        html_files = sorted(
+            list(dir_path.rglob("*.html")) + list(dir_path.rglob("*.htm")),
+            key=lambda p: str(p).lower(),
+        )
         if skip_ids:
             before = len(html_files)
             html_files = [f for f in html_files if f.stem not in skip_ids]
@@ -119,6 +123,7 @@ class EntityExtractionPipeline:
         done_count = 0
         success_count = 0
         progress_file = config.OUTPUT_DIR / "progress.txt"
+        checkpoint_results = list(checkpoint_results or [])
 
         # 并发处理
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
@@ -136,11 +141,12 @@ class EntityExtractionPipeline:
                 except Exception as e:
                     print(f"\n[错误] 处理 {html_file.name} 失败: {e}")
                     sys.stdout.flush()
-                    results.append(ExtractionResult(
+                    result = ExtractionResult(
                         announcement_id=html_file.stem,
                         success=False,
                         error_message=str(e),
-                    ))
+                    )
+                    results.append(result)
                 done_count += 1
                 if progress_callback:
                     try:
@@ -149,6 +155,7 @@ class EntityExtractionPipeline:
                         pass
                 # 每 10 个文件写一次进度
                 if done_count % 10 == 0 or done_count == total:
+                    self._write_checkpoint(checkpoint_results + results)
                     elapsed = time.time() - start_time
                     rate = done_count / elapsed if elapsed > 0 else 0
                     eta = (total - done_count) / rate if rate > 0 else 0
@@ -183,9 +190,13 @@ class EntityExtractionPipeline:
         # 2. 查找并解析附件（仅匹配与 HTML 同名的 zip 文件）
         matching_zip = html_path.parent / f"{announcement_id}.zip"
         if matching_zip.exists():
-            texts, tables = self.attachment_parser.parse_zip(str(matching_zip), announcement_id)
+            # AttachmentParser 会记录本次解析状态；并发任务各用独立实例，
+            # 避免多个线程共享可变列表造成统计串扰。
+            attachment_parser = AttachmentParser()
+            texts, tables = attachment_parser.parse_zip(str(matching_zip), announcement_id)
             content.attachment_texts.update(texts)
-            content.attachment_files.extend(texts.keys())
+            content.attachment_tables.update(tables)
+            content.attachment_files.extend(dict.fromkeys([*texts.keys(), *tables.keys()]))
 
         # 3. 实体提取
         has_tables = bool(content.html_tables) or bool(content.attachment_tables)
@@ -207,6 +218,7 @@ class EntityExtractionPipeline:
                 with self._db_lock:
                     self.repository.save_extraction_result(
                         result=result,
+                        title=content.title,
                         raw_text=content.full_text,
                         file_path=str(html_path),
                     )
@@ -244,7 +256,11 @@ class EntityExtractionPipeline:
 
         # 处理输入
         if path.is_dir():
-            results = self.process_directory(str(path), skip_ids=skip_ids)
+            results = self.process_directory(
+                str(path),
+                skip_ids=skip_ids,
+                checkpoint_results=prev_results,
+            )
         elif path.suffix.lower() in (".html", ".htm"):
             if path.stem in skip_ids:
                 print(f"[续跑] {path.name} 已成功处理过，跳过")
@@ -262,6 +278,7 @@ class EntityExtractionPipeline:
         if all_results:
             self.writer.write(all_results, filename=output_filename, fmt=output_format)
             self.writer.write_raw_results(all_results)
+            self._clear_checkpoint()
 
             # 统计
             success_count = sum(1 for r in all_results if r.success)
@@ -299,12 +316,18 @@ class EntityExtractionPipeline:
             (成功结果列表, 已成功的公告ID集合)
         """
         import json
-        from models.schemas import ExtractedEntity
+        from models.schemas import ExtractedEntity, deduplicate_entities
 
-        raw_path = config.OUTPUT_DIR / "raw_results.json"
+        writer = getattr(self, "writer", None)
+        output_dir = Path(getattr(writer, "output_dir", config.OUTPUT_DIR))
+        checkpoint_path = output_dir / "raw_results.checkpoint.json"
+        raw_path = checkpoint_path if checkpoint_path.exists() else output_dir / "raw_results.json"
         if not raw_path.exists():
             print(f"[续跑警告] 未找到历史结果文件 {raw_path}，将全量处理")
             return [], set()
+
+        if raw_path == checkpoint_path:
+            print(f"[续跑] 检测到中断检查点，将优先读取 {checkpoint_path}")
 
         with open(raw_path, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -314,7 +337,9 @@ class EntityExtractionPipeline:
         for item in data:
             if not item.get("success"):
                 continue
-            entities = [ExtractedEntity(**e) for e in item.get("entities", [])]
+            entities = deduplicate_entities(
+                [ExtractedEntity(**e) for e in item.get("entities", [])]
+            )
             prev_results.append(ExtractionResult(
                 announcement_id=item["announcement_id"],
                 entities=entities,
@@ -324,3 +349,21 @@ class EntityExtractionPipeline:
             skip_ids.add(item["announcement_id"])
 
         return prev_results, skip_ids
+
+    def _write_checkpoint(self, results: List[ExtractionResult]):
+        """原子写入中断检查点，避免进程退出时破坏已有进度。"""
+        writer = getattr(self, "writer", None)
+        output_dir = Path(getattr(writer, "output_dir", config.OUTPUT_DIR))
+        output_dir.mkdir(parents=True, exist_ok=True)
+        temp_name = "raw_results.checkpoint.tmp.json"
+        temp_path = output_dir / temp_name
+        checkpoint_path = output_dir / "raw_results.checkpoint.json"
+        (writer or ResultWriter(output_dir)).write_raw_results(results, filename=temp_name)
+        os.replace(temp_path, checkpoint_path)
+
+    def _clear_checkpoint(self):
+        """正式结果写入成功后清理临时检查点。"""
+        writer = getattr(self, "writer", None)
+        output_dir = Path(getattr(writer, "output_dir", config.OUTPUT_DIR))
+        checkpoint_path = output_dir / "raw_results.checkpoint.json"
+        checkpoint_path.unlink(missing_ok=True)

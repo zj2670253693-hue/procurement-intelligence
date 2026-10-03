@@ -21,7 +21,7 @@ SYSTEM_PROMPT = """你是一个专业的政府采购信息提取专家。你的�
 ## 注意事项
 1. 一篇公告可能包含多个标的物，请全部提取
 2. 如果某个字段在文本中找不到，留空字符串 ""
-3. 品目如果有明确的品目编码请一并提取，没有则填写最接近的类别名称
+3. 品目仅提取原文明确出现的编码或类别名称；原文没有时留空，不要自行归类
 4. 金额请保留原始文本中的数值和单位
 5. 只提取公告中明确出现的信息，不要推测或编造
 6. 如果公告中有表格，表格中的信息尤为重要
@@ -58,15 +58,13 @@ USER_PROMPT_TEMPLATE = """请从以下政府采购公告文本中提取标的物
 
 
 # ============================================================
-# 表格专用提示词（当公告中包含表格时使用）
+# 含表格内容的补充提示（输入仍然是公告正文与附件的完整文本）
 # ============================================================
-TABLE_PROMPT_TEMPLATE = """以下是公告中提取到的表格内容（每行用 | 分隔），请从中提取标的物信息：
+TABLE_CONTENT_NOTE = """
 
----表格内容开始---
-{table_text}
----表格内容结束---
-
-注意：表格中可能包含多行标的物，请逐行提取。请按照系统提示词要求的 JSON 格式输出。"""
+补充说明：上述完整内容中含有从 HTML 或附件解析出的表格，部分表格行使用“ | ”分隔。
+请同时检查正文段落和所有表格，不要只读取表格，也不要因同一标的物在正文和附件中重复出现而重复输出。
+"""
 
 
 # ============================================================
@@ -104,9 +102,10 @@ EXTRA_INFO_USER_PROMPT = """请从以下政府采购公告文本中提取项目�
 
 def build_extraction_prompt(text: str, has_tables: bool = False) -> tuple:
     """构建提取 prompt"""
+    user_prompt = USER_PROMPT_TEMPLATE.format(announcement_text=text)
     if has_tables:
-        return SYSTEM_PROMPT, TABLE_PROMPT_TEMPLATE.format(table_text=text)
-    return SYSTEM_PROMPT, USER_PROMPT_TEMPLATE.format(announcement_text=text)
+        user_prompt += TABLE_CONTENT_NOTE
+    return SYSTEM_PROMPT, user_prompt
 
 
 def build_extra_info_prompt(text: str) -> tuple:

@@ -2,6 +2,8 @@
 任务一：数据模型定义
 定义公告解析结果、提取结果等核心数据结构
 """
+import re
+import unicodedata
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 
@@ -45,6 +47,28 @@ class ExtractedEntity(BaseModel):
             "数量": self.quantity,
             "总价": self.total_price,
         }
+
+
+ENTITY_FIELDS = (
+    "product_name", "category", "brand", "spec_model",
+    "unit_price", "quantity", "total_price",
+)
+
+
+def deduplicate_entities(entities: List[ExtractedEntity]) -> List[ExtractedEntity]:
+    """按七字段归一化后的完整内容稳定去重，保留首次出现顺序。"""
+    unique = []
+    seen = set()
+    for entity in entities:
+        key = tuple(
+            re.sub(r"\s+", "", unicodedata.normalize("NFKC", getattr(entity, field) or ""))
+            for field in ENTITY_FIELDS
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(entity)
+    return unique
 
 
 class ExtractionResult(BaseModel):

@@ -27,12 +27,14 @@ mysql-msi.log
 # ============================================================
 node_modules/
 dist/
+deploy/artifacts/
 .pnpm-store/
 __pycache__/
 *.py[cod]
 *.egg-info/
 .venv/
 venv/
+.worktrees/
 
 # ============================================================
 # 运行时产物（上传测试数据、进度文件）
@@ -40,6 +42,9 @@ venv/
 task1_entity_extraction/output/uploads/
 task1_entity_extraction/output/upload_*
 task1_entity_extraction/output/progress.txt
+task1_entity_extraction/output/*.json
+task1_entity_extraction/output/*.csv
+task1_entity_extraction/output/*.xlsx
 
 # 验证集：其「原文摘录」sheet 内嵌命题方原始公告全文（约 40 万字），
 # 属赛事数据内容，不外传。可由 build_validation_set.py 随时重新生成。
