@@ -9,9 +9,14 @@ requests>=2.31.0
 # 附件解析
 python-docx>=1.1.0
 openpyxl>=3.1.0
+xlrd>=2.0.1
 pdfplumber>=0.10.0
 PyPDF2>=3.0.0
 python-pptx>=0.6.21
+legacy-doc>=0.2.1,<0.3; python_version >= "3.11"
+pypdfium2>=5.9,<6
+rapidocr>=3.9,<4
+onnxruntime>=1.20,<2
 
 # 数据处理
 pandas>=2.0.0

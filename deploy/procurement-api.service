@@ -1,0 +1,25 @@
+[Unit]
+Description=Procurement Entity Extraction API
+After=network-online.target mysql.service
+Wants=network-online.target
+Requires=mysql.service
+
+[Service]
+Type=simple
+User=zhoujin
+Group=projectteam
+WorkingDirectory=/srv/procurement-app/current/backend
+EnvironmentFile=/etc/procurement-app/procurement.env
+ExecStart=/srv/procurement-app/shared/venv/bin/python -m uvicorn api.main:app --host 127.0.0.1 --port 8000 --workers 1
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=120
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/srv/procurement-app
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

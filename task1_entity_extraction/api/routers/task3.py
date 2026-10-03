@@ -10,7 +10,6 @@
 
 上传后立即返回 task_id，实际提取在后台线程执行，避免 HTTP 请求超时。
 """
-import io
 import shutil
 import zipfile
 from pathlib import Path
@@ -26,18 +25,57 @@ UPLOAD_ROOT = config.OUTPUT_DIR / "uploads"
 ALLOWED_SUFFIXES = {".html", ".htm", ".zip"}
 
 
-def _zip_contains_html(data: bytes) -> bool:
-    """判断这个 zip 是「数据集整包」（内含 html）还是「单篇公告的附件包」"""
+def _classify_zip(path: Path) -> str:
+    """
+    区分数据集外层压缩包和单篇公告附件包。
+
+    官方数据分成两包：HTML 包内全是 html，附件包内全是以公告 ID
+    命名的 zip。单篇附件包通常直接包含 pdf/docx 等文件。
+    """
     try:
-        with zipfile.ZipFile(io.BytesIO(data)) as zf:
-            return any(Path(n).suffix.lower() in (".html", ".htm") for n in zf.namelist())
+        with zipfile.ZipFile(path) as zf:
+            files = [i for i in zf.infolist() if not i.is_dir()]
+            if any(Path(i.filename).suffix.lower() in (".html", ".htm") for i in files):
+                return "dataset"
+            nested_zip_count = sum(Path(i.filename).suffix.lower() == ".zip" for i in files)
+            if len(files) >= 2 and nested_zip_count >= 2 and nested_zip_count / len(files) >= 0.8:
+                return "dataset"
+            return "attachment"
     except zipfile.BadZipFile:
-        return False
+        raise ValueError(f"ZIP 文件损坏或格式不正确: {path.name}")
+
+
+def _extract_dataset_archive(archive_path: Path, work_dir: Path) -> int:
+    """安全地把官方数据集外层包平铺到任务目录，不覆盖同名文件。"""
+    saved = 0
+    with zipfile.ZipFile(archive_path) as zf:
+        for entry in zf.infolist():
+            if entry.is_dir():
+                continue
+            # 同时兼容 ZIP 内的 / 与 \，并通过只取 basename 阻断路径穿越。
+            entry_name = entry.filename.replace("\\", "/").rsplit("/", 1)[-1]
+            if not entry_name or Path(entry_name).suffix.lower() not in ALLOWED_SUFFIXES:
+                continue
+            target = work_dir / entry_name
+            if target.exists():
+                raise ValueError(f"压缩包内出现重复文件名，拒绝覆盖: {entry_name}")
+            with zf.open(entry) as source, target.open("xb") as destination:
+                shutil.copyfileobj(source, destination, length=1024 * 1024)
+            saved += 1
+    return saved
+
+
+async def _save_upload(upload: UploadFile, target: Path) -> None:
+    """分块保存上传文件，避免把数 GB 的官方附件包一次性读入内存。"""
+    with target.open("xb") as output:
+        while chunk := await upload.read(1024 * 1024):
+            output.write(chunk)
 
 
 def _run_task(task_id: str, work_dir: Path, run_extraction: bool):
     """后台任务：解析上传的数据集并提取标的物"""
     try:
+        task_manager.update(task_id, status="processing", message="正在解析上传数据")
         if not run_extraction:
             # 低成本模式：只解析不调用大模型，用于检查数据质量
             from data_loader.html_parser import HTMLAnnouncementParser
@@ -62,9 +100,12 @@ def _run_task(task_id: str, work_dir: Path, run_extraction: bool):
         from pipeline import EntityExtractionPipeline
         from output.writer import ResultWriter
 
-        task_manager.update(task_id, status="processing", message="正在解析与提取")
+        task_manager.update(task_id, message="正在解析与提取")
 
-        pipeline = EntityExtractionPipeline(extract_extra=True, max_workers=8)
+        pipeline = EntityExtractionPipeline(
+            extract_extra=True,
+            max_workers=config.PROCESS_MAX_WORKERS,
+        )
 
         def on_progress(done, total, success_count, result):
             task_manager.update(task_id, done=done, success=success_count)
@@ -119,34 +160,37 @@ async def upload_dataset(
     work_dir.mkdir(parents=True, exist_ok=True)
 
     skipped, saved = [], 0
+    incoming_dir = work_dir / "_incoming"
+    incoming_dir.mkdir(exist_ok=True)
     try:
-        for uf in files:
+        for index, uf in enumerate(files):
             # 只取文件名部分，防止路径穿越
             name = Path(uf.filename or "").name
             if not name:
                 continue
-            raw = await uf.read()
             suffix = Path(name).suffix.lower()
-
-            # 数据集整包：解出来平铺到工作目录，保证 html 与同名 zip 相邻
-            if suffix == ".zip" and _zip_contains_html(raw):
-                with zipfile.ZipFile(io.BytesIO(raw)) as zf:
-                    for entry in zf.infolist():
-                        if entry.is_dir():
-                            continue
-                        entry_name = Path(entry.filename).name
-                        if Path(entry_name).suffix.lower() not in ALLOWED_SUFFIXES:
-                            continue
-                        (work_dir / entry_name).write_bytes(zf.read(entry.filename))
-                        saved += 1
-                continue
 
             if suffix not in ALLOWED_SUFFIXES:
                 skipped.append(name)
                 continue
 
-            (work_dir / name).write_bytes(raw)
+            # 先流式写入临时文件，再判断 ZIP 类型；临时文件不使用原名，
+            # 防止外层包与包内文件同名时覆盖正在读取的文件。
+            incoming = incoming_dir / f"{index:04d}.upload"
+            await _save_upload(uf, incoming)
+
+            if suffix == ".zip" and _classify_zip(incoming) == "dataset":
+                saved += _extract_dataset_archive(incoming, work_dir)
+                incoming.unlink()
+                continue
+
+            target = work_dir / name
+            if target.exists():
+                raise ValueError(f"上传内容中出现重复文件名，拒绝覆盖: {name}")
+            incoming.replace(target)
             saved += 1
+
+        shutil.rmtree(incoming_dir, ignore_errors=True)
 
         html_count = len(list(work_dir.glob("*.html"))) + len(list(work_dir.glob("*.htm")))
         if html_count == 0:

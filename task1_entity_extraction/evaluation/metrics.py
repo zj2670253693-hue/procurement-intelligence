@@ -3,6 +3,9 @@
 计算提取结果的准确率、精确率、召回率
 赛题评分公式：提取准确性 = 准确率×0.4 + 精确率×0.3 + 召回率×0.3
 """
+from decimal import Decimal, InvalidOperation
+import re
+import unicodedata
 from typing import List, Dict, Tuple
 from models.schemas import ExtractionResult, EvaluationMetrics, ExtractedEntity
 import config
@@ -38,21 +41,22 @@ class Evaluator:
             准确率 = TP / (TP + FP + FN)
         """
         gt_map = {gt["announcement_id"]: gt for gt in ground_truths}
+        pred_map = {}
+        for pred in predictions:
+            if pred.announcement_id not in gt_map:
+                continue
+            if pred.announcement_id in pred_map:
+                raise ValueError(f"预测结果中公告 ID 重复: {pred.announcement_id}")
+            pred_map[pred.announcement_id] = pred
 
         tp = 0
         fp = 0
         fn = 0
         field_stats = {f: {"tp": 0, "fp": 0, "fn": 0} for f in self.FIELD_KEYS}
-        evaluated_samples = 0
-
-        for pred in predictions:
-            aid = pred.announcement_id
-            if aid not in gt_map:
-                continue
-            evaluated_samples += 1
-
-            gt_entities = gt_map[aid].get("entities", [])
-            pred_entities = [e.model_dump() for e in pred.entities]
+        for aid, ground_truth in gt_map.items():
+            gt_entities = ground_truth.get("entities", [])
+            pred = pred_map.get(aid)
+            pred_entities = [e.model_dump() for e in pred.entities] if pred else []
 
             # 先做实体对齐，避免因输出顺序不同导致全盘错配
             pairs, unmatched_pred, unmatched_gt = self._align(pred_entities, gt_entities)
@@ -64,7 +68,7 @@ class Evaluator:
                     gt_val = str(gt_entities[gi].get(field, "")).strip()
                     if not pred_val and not gt_val:
                         continue
-                    if pred_val and gt_val and self._field_match(pred_val, gt_val):
+                    if pred_val and gt_val and self._field_match(pred_val, gt_val, field):
                         tp += 1
                         field_stats[field]["tp"] += 1
                     else:
@@ -113,7 +117,7 @@ class Evaluator:
             recall=round(recall, 4),
             f1_score=round(f1, 4),
             field_stats=field_stats_out,
-            total_samples=evaluated_samples,
+            total_samples=len(gt_map),
             total_fields=tp + fp + fn,
             correct_fields=tp,
         )
@@ -146,7 +150,7 @@ class Evaluator:
                 for f in gt_non_empty:
                     pv = str(pe.get(f, "")).strip()
                     gv = str(ge.get(f, "")).strip()
-                    if pv and self._field_match(pv, gv):
+                    if pv and self._field_match(pv, gv, f):
                         hit += 1
                 if hit > 0:
                     scored.append((hit / len(gt_non_empty), hit, pi, gi))
@@ -167,33 +171,53 @@ class Evaluator:
         unmatched_gt = [i for i in range(len(gt_entities)) if i not in used_gt]
         return pairs, unmatched_pred, unmatched_gt
 
-    def _field_match(self, pred: str, gt: str) -> bool:
-        """判断两个字段值是否匹配（支持模糊匹配）"""
-        # 完全匹配
-        if pred == gt:
+    def _field_match(self, pred: str, gt: str, field: str = "") -> bool:
+        """按字段类型判断两个值是否匹配，避免“数字碰巧相同”的误判。"""
+        norm_pred = self._normalize_text(pred)
+        norm_gt = self._normalize_text(gt)
+
+        if norm_pred == norm_gt:
             return True
 
-        # 金额归一化匹配
-        norm_pred = self._normalize_amount(pred)
-        norm_gt = self._normalize_amount(gt)
-        if norm_pred and norm_gt and norm_pred == norm_gt:
-            return True
+        # 只有金额字段才按金额比较。旧实现会把“服务器1”和“路由器1”
+        # 因为都含数字 1 而误判为相同。
+        if field in {"unit_price", "total_price"}:
+            amount_pred = self._normalize_amount(pred)
+            amount_gt = self._normalize_amount(gt)
+            return amount_pred is not None and amount_gt is not None and amount_pred == amount_gt
 
-        # 包含匹配（预测值被标准答案包含，或反之）
-        if len(pred) > 2 and len(gt) > 2:
-            if pred in gt or gt in pred:
+        # 名称、品目、品牌和规格允许较强的包含关系，但短片段或差异过大
+        # 不算命中，避免用一个通用词匹配整段描述。
+        if field in {"product_name", "category", "brand", "spec_model"}:
+            shorter, longer = sorted((norm_pred, norm_gt), key=len)
+            if len(shorter) >= 4 and len(shorter) / len(longer) >= 0.6 and shorter in longer:
                 return True
 
         return False
 
-    def _normalize_amount(self, text: str) -> str:
-        """金额归一化：提取数字部分进行比较"""
-        import re
-        # 提取数字（含小数）
-        nums = re.findall(r"\d+(?:\.\d+)?", text)
-        if nums:
-            return nums[0]
-        return ""
+    @staticmethod
+    def _normalize_text(text: str) -> str:
+        """统一全半角、大小写、空白和常见分隔符。"""
+        text = unicodedata.normalize("NFKC", str(text or "")).lower()
+        return re.sub(r"[^0-9a-z_\u4e00-\u9fff]+", "", text)
+
+    @staticmethod
+    def _normalize_amount(text: str) -> Decimal | None:
+        """把元、万元、亿元统一换算成“元”后比较。"""
+        normalized = unicodedata.normalize("NFKC", str(text or "")).replace(",", "")
+        match = re.search(r"[-+]?\d+(?:\.\d+)?", normalized)
+        if not match:
+            return None
+        try:
+            value = Decimal(match.group(0))
+        except InvalidOperation:
+            return None
+
+        if "亿元" in normalized:
+            value *= Decimal("100000000")
+        elif "万元" in normalized or re.search(r"\d万(?:\D|$)", normalized):
+            value *= Decimal("10000")
+        return value.normalize()
 
     def print_report(self, metrics: EvaluationMetrics):
         """打印评测报告"""

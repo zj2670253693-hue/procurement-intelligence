@@ -3,7 +3,7 @@
 """
 from typing import List, Dict, Optional
 from database.connection import DatabaseManager
-from models.schemas import ExtractionResult, ExtractedEntity
+from models.schemas import ExtractionResult, ExtractedEntity, deduplicate_entities
 
 
 class AnnouncementDAO:
@@ -54,6 +54,7 @@ class EntityDAO:
 
     def save_entities(self, announcement_id: str, entities: List[ExtractedEntity]):
         """保存某公告的所有提取结果（先删后插，保证幂等）"""
+        entities = deduplicate_entities(entities)
         # 先删除该公告的旧数据
         with self.db.cursor() as cur:
             cur.execute("DELETE FROM extracted_entities WHERE announcement_id = %s", (announcement_id,))
@@ -202,7 +203,13 @@ class DataRepository:
         self.entities = EntityDAO(db)
         self.projects = ProjectDAO(db)
 
-    def save_extraction_result(self, result: ExtractionResult, raw_text: str = "", file_path: str = ""):
+    def save_extraction_result(
+        self,
+        result: ExtractionResult,
+        title: str = "",
+        raw_text: str = "",
+        file_path: str = "",
+    ):
         """保存完整的提取结果（公告 + 标的物 + 项目关系）"""
         aid = result.announcement_id
 
@@ -210,7 +217,7 @@ class DataRepository:
         status = "done" if result.success else "failed"
         self.announcements.upsert(
             announcement_id=aid,
-            title="",
+            title=title,
             file_path=file_path,
             raw_text=raw_text,
             status=status,

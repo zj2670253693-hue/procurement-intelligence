@@ -76,12 +76,31 @@ EXTRA_FIELDS = [
 # ============================================================
 # 数据处理配置
 # ============================================================
+# 2核4GB 比赛环境默认仅保留 2 个并发任务。所有批处理入口共享该值，
+# 避免 API 上传、命令行提取和附件分析各自使用过高并发。
+PROCESS_MAX_WORKERS = max(1, int(os.getenv("PROCESS_MAX_WORKERS", "2")))
+
 # 支持的附件格式
 SUPPORTED_ATTACHMENT_FORMATS = [".doc", ".docx", ".xlsx", ".xls", ".pdf", ".pptx", ".txt"]
 
 # 文本分块配置（当文本过长时分块处理）
 MAX_TEXT_LENGTH_PER_REQUEST = 8000  # 单次请求最大文本长度
 TEXT_CHUNK_OVERLAP = 500             # 分块重叠字符数
+
+# PDF 解析与 OCR。普通长 PDF 抽取“前部 + 均匀中部 + 尾部”，
+# 报价/明细类高价值附件提高页数上限，避免关键表格恰好在后半部。
+PDF_MAX_TEXT_PAGES = int(os.getenv("PDF_MAX_TEXT_PAGES", "20"))
+PDF_RELEVANT_MAX_TEXT_PAGES = int(os.getenv("PDF_RELEVANT_MAX_TEXT_PAGES", "60"))
+PDF_RELEVANT_NAME_PATTERN = os.getenv(
+    "PDF_RELEVANT_NAME_PATTERN",
+    r"报价|明细|中标|成交|分项|清单|一览表|最终承诺",
+)
+
+# 仅对无文字层（或文字极少）的 PDF 页执行 OCR，控制速度和内存。
+OCR_ENABLED = os.getenv("OCR_ENABLED", "true").lower() == "true"
+OCR_MAX_PAGES_PER_PDF = int(os.getenv("OCR_MAX_PAGES_PER_PDF", "5"))
+OCR_MIN_TEXT_CHARS = int(os.getenv("OCR_MIN_TEXT_CHARS", "30"))
+OCR_RENDER_SCALE = float(os.getenv("OCR_RENDER_SCALE", "2.0"))
 
 # ============================================================
 # 数据库配置（MySQL）

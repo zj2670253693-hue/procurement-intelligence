@@ -25,9 +25,26 @@ FIELDS = ["product_name", "category", "brand", "spec_model",
 FIELD_LABELS = [config.FIELD_LABELS[f] for f in FIELDS]
 
 
-def load_ground_truth(xlsx_path: Path) -> list:
+REVIEWED_VERDICTS = {
+    "正确", "错误", "修改", "已修改", "新增",
+    "删除", "删除该行", "delete", "该公告无标的物", "无标的物",
+}
+
+
+def load_ground_truth(xlsx_path: Path, require_reviewed: bool = True) -> list:
     """从人工核验过的 Excel 读取标准答案"""
     df = pd.read_excel(xlsx_path, sheet_name="标注(待核验)").fillna("")
+
+    if require_reviewed:
+        verdicts = df["核验结论"].astype(str).str.strip()
+        unreviewed = df.index[~verdicts.isin(REVIEWED_VERDICTS)].tolist()
+        if unreviewed:
+            preview = "、".join(str(i + 2) for i in unreviewed[:10])
+            raise ValueError(
+                f"验证集还有 {len(unreviewed)} 行未完成人工核验"
+                f"（Excel 行号示例：{preview}）。请先填写“核验结论”，"
+                "或仅在调试时使用 --allow-unreviewed。"
+            )
 
     gt = {}
     dropped = 0
@@ -70,6 +87,7 @@ def load_predictions(raw_path: Path) -> list:
 
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    allow_unreviewed = "--allow-unreviewed" in sys.argv[1:]
     xlsx_path = Path(args[0]) if args else config.OUTPUT_DIR / "validation_set" / "ground_truth.xlsx"
 
     if not xlsx_path.exists():
@@ -82,7 +100,11 @@ def main():
         print(f"[错误] 找不到提取结果: {raw_path}")
         sys.exit(1)
 
-    ground_truths = load_ground_truth(xlsx_path)
+    try:
+        ground_truths = load_ground_truth(xlsx_path, require_reviewed=not allow_unreviewed)
+    except ValueError as e:
+        print(f"[错误] {e}")
+        sys.exit(1)
     predictions = load_predictions(raw_path)
 
     gt_ids = {g["announcement_id"] for g in ground_truths}

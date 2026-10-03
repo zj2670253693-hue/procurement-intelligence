@@ -62,17 +62,24 @@ def main():
             error_message=item.get("error") or "",
         )
 
-        raw_text, file_path = "", ""
+        title, raw_text, file_path = "", "", ""
         if html_dir:
             html_file = html_dir / f"{aid}.html"
             if html_file.exists():
                 file_path = str(html_file)
                 try:
-                    raw_text = html_parser.parse_file(str(html_file)).html_text
+                    content = html_parser.parse_file(str(html_file))
+                    title = content.title
+                    raw_text = content.html_text
                 except Exception:
                     pass
 
-        repository.save_extraction_result(result, raw_text=raw_text, file_path=file_path)
+        repository.save_extraction_result(
+            result,
+            title=title,
+            raw_text=raw_text,
+            file_path=file_path,
+        )
 
         if i % 200 == 0 or i == total:
             print(f"  进度 {i}/{total}")

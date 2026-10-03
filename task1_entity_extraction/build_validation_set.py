@@ -12,6 +12,7 @@
 """
 import json
 import logging
+import random
 import sys
 from pathlib import Path
 
@@ -46,6 +47,11 @@ def stratify(records: list, n: int) -> list:
             buckets["6-10条"].append(r)
         else:
             buckets["11条以上"].append(r)
+
+    # 固定种子保证可复现，同时避免总是抽到文件列表最前面的公告。
+    rng = random.Random(2026)
+    for items in buckets.values():
+        rng.shuffle(items)
 
     total = len(records)
     picked = []

@@ -99,11 +99,18 @@
       </div>
     </el-card>
 
-    <el-drawer v-model="drawer.visible" size="72%" :with-header="false">
+    <el-drawer v-model="drawer.visible" size="76%" :with-header="false">
       <div class="drawer-head">
         <div>
           <div class="drawer-title">公告 {{ drawer.id }}</div>
-          <div class="drawer-sub">该公告提取出的全部标的物</div>
+          <div class="drawer-sub">
+            <template v-if="announcement">
+              原文 {{ announcement.html_length.toLocaleString() }} 字 ·
+              附件 {{ announcement.attachment_files.length }} 个
+              <span v-if="!announcement.source_exists" class="warn">（源文件已不可用，展示库内文本）</span>
+            </template>
+            <template v-else>提取出的标的物与公告原文</template>
+          </div>
         </div>
         <el-button text :icon="Close" @click="drawer.visible = false" />
       </div>
@@ -117,23 +124,65 @@
         class="mb-16"
       />
 
-      <el-table v-loading="drawer.loading" :data="drawer.rows" stripe border max-height="620">
-        <el-table-column type="index" label="#" width="56" align="center" />
-        <el-table-column
-          v-for="col in columns"
-          :key="col.prop"
-          :prop="col.prop"
-          :label="col.label"
-          :min-width="col.minWidth || 140"
-          show-overflow-tooltip
-        >
-          <template #default="{ row }">
-            <span :class="{ 'cell-empty': !row[col.prop] }">
-              {{ row[col.prop] || '—' }}
-            </span>
-          </template>
-        </el-table-column>
-      </el-table>
+      <el-tabs v-model="drawer.tab" @tab-change="onTabChange">
+        <!-- 页签 1：提取结果 -->
+        <el-tab-pane :label="`提取结果 (${drawer.rows.length})`" name="entities">
+          <el-table v-loading="drawer.loading" :data="drawer.rows" stripe border max-height="600">
+            <el-table-column type="index" label="#" width="56" align="center" />
+            <el-table-column
+              v-for="col in columns"
+              :key="col.prop"
+              :prop="col.prop"
+              :label="col.label"
+              :min-width="col.minWidth || 140"
+              show-overflow-tooltip
+            >
+              <template #default="{ row }">
+                <span :class="{ 'cell-empty': !row[col.prop] }">
+                  {{ row[col.prop] || '—' }}
+                </span>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-tab-pane>
+
+        <!-- 页签 2：公告原文 -->
+        <el-tab-pane label="公告原文" name="html">
+          <div v-loading="drawer.loading" class="doc-wrap">
+            <pre v-if="announcement?.html_text" class="doc-text">{{ announcement.html_text }}</pre>
+            <el-empty v-else description="未获取到公告原文" />
+          </div>
+        </el-tab-pane>
+
+        <!-- 页签 3：附件 -->
+        <el-tab-pane :label="`附件 (${announcement?.attachment_files.length || 0})`" name="attachments">
+          <div v-loading="drawer.attLoading" class="doc-wrap">
+            <el-alert
+              v-if="drawer.attMessage"
+              :title="drawer.attMessage"
+              type="warning"
+              show-icon
+              :closable="false"
+              class="mb-16"
+            />
+
+            <el-collapse v-if="attachmentItems.length">
+              <el-collapse-item v-for="(a, i) in attachmentItems" :key="i" :name="i">
+                <template #title>
+                  <span class="att-name">{{ a.name }}</span>
+                  <span class="att-len">{{ a.length.toLocaleString() }} 字</span>
+                </template>
+                <pre class="doc-text">{{ a.text }}</pre>
+              </el-collapse-item>
+            </el-collapse>
+
+            <el-empty
+              v-else-if="!drawer.attLoading && !drawer.attMessage"
+              description="该公告没有附件包"
+            />
+          </div>
+        </el-tab-pane>
+      </el-tabs>
     </el-drawer>
   </div>
 </template>
@@ -143,7 +192,12 @@ import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Close, RefreshLeft, Search, View } from '@element-plus/icons-vue'
 
-import { getEntitiesByAnnouncement, searchEntities } from '../api/task1'
+import {
+  getAnnouncement,
+  getAnnouncementAttachments,
+  getEntitiesByAnnouncement,
+  searchEntities,
+} from '../api/task1'
 
 const columns = [
   { prop: 'product_name', label: '产品服务名称', minWidth: 200 },
@@ -177,11 +231,18 @@ const query = reactive({
 
 const drawer = reactive({
   visible: false,
+  tab: 'entities',
   loading: false,
   error: '',
   id: '',
   rows: [],
+  attLoading: false,
+  attLoaded: false,
+  attMessage: '',
 })
+
+const announcement = ref(null)
+const attachmentItems = ref([])
 
 async function load() {
   loading.value = true
@@ -223,17 +284,45 @@ function onPageChange(page) {
 
 async function openAnnouncement(id) {
   drawer.visible = true
+  drawer.tab = 'entities'
   drawer.loading = true
   drawer.error = ''
   drawer.id = id
   drawer.rows = []
+  drawer.attLoading = false
+  drawer.attLoaded = false
+  drawer.attMessage = ''
+  announcement.value = null
+  attachmentItems.value = []
+
   try {
-    const data = await getEntitiesByAnnouncement(id)
-    drawer.rows = data.items
+    // 标的物与公告原文并行取，原文失败不影响表格展示
+    const [ents, ann] = await Promise.all([
+      getEntitiesByAnnouncement(id),
+      getAnnouncement(id).catch(() => null),
+    ])
+    drawer.rows = ents.items
+    announcement.value = ann
   } catch (e) {
     drawer.error = e.message
   } finally {
     drawer.loading = false
+  }
+}
+
+async function onTabChange(name) {
+  // 附件解析较慢，首次切到该页签时才加载
+  if (name !== 'attachments' || drawer.attLoaded) return
+  drawer.attLoaded = true
+  drawer.attLoading = true
+  try {
+    const data = await getAnnouncementAttachments(drawer.id)
+    attachmentItems.value = data.items || []
+    drawer.attMessage = data.message || ''
+  } catch (e) {
+    drawer.attMessage = e.message
+  } finally {
+    drawer.attLoading = false
   }
 }
 
@@ -323,8 +412,8 @@ onMounted(load)
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding-bottom: 16px;
-  margin-bottom: 16px;
+  padding-bottom: 14px;
+  margin-bottom: 10px;
   border-bottom: 1px solid var(--c-border);
 }
 
@@ -338,5 +427,41 @@ onMounted(load)
   font-size: 12px;
   color: var(--c-text-3);
   margin-top: 3px;
+}
+
+.warn {
+  color: var(--c-warning);
+}
+
+/* 正文/附件展示 */
+.doc-wrap {
+  min-height: 120px;
+}
+
+.doc-text {
+  margin: 0;
+  padding: 14px 16px;
+  max-height: 560px;
+  overflow: auto;
+  background: var(--c-surface-2);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-size: 13px;
+  line-height: 1.85;
+  color: var(--c-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.att-name {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.att-len {
+  margin-left: 10px;
+  font-size: 12px;
+  color: var(--c-text-3);
 }
 </style>

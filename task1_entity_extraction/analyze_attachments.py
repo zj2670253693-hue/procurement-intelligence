@@ -38,8 +38,10 @@ def classify_error(exc: Exception) -> str:
     return f"其他：{msg[:60]}"
 
 
-def analyze_one(html_file: Path, parser: AttachmentParser) -> dict:
+def analyze_one(html_file: Path) -> dict:
     """分析单篇公告的附件情况"""
+    # 每个线程独立创建解析器：它内部会记录被修正的文件名，共享实例会串味
+    parser = AttachmentParser()
     aid = html_file.stem
     zip_path = html_file.parent / f"{aid}.zip"
 
@@ -54,6 +56,7 @@ def analyze_one(html_file: Path, parser: AttachmentParser) -> dict:
         "ok_by_ext": Counter(),       # 扩展名 -> 成功数
         "errors": Counter(),          # 失败原因 -> 次数
         "unreadable": 0,              # 无法读取的成员
+        "dedoubled": 0,               # 被修正过「字符重复」的文件数
     }
     if not info["has_zip"]:
         return info
@@ -89,6 +92,8 @@ def analyze_one(html_file: Path, parser: AttachmentParser) -> dict:
     except zipfile.BadZipFile:
         info["errors"]["zip 包本身损坏"] += 1
 
+    info["dedoubled"] = len(parser.dedoubled_files)
+
     return info
 
 
@@ -106,10 +111,9 @@ def main():
     html_files = sorted(html_dir.glob("*.html"))
     print(f"[分析] 共 {len(html_files)} 篇公告，开始扫描附件...\n")
 
-    parser = AttachmentParser()
     results = []
-    with ThreadPoolExecutor(max_workers=8) as ex:
-        futures = {ex.submit(analyze_one, f, parser): f for f in html_files}
+    with ThreadPoolExecutor(max_workers=config.PROCESS_MAX_WORKERS) as ex:
+        futures = {ex.submit(analyze_one, f): f for f in html_files}
         done = 0
         for fut in as_completed(futures):
             results.append(fut.result())
@@ -124,6 +128,7 @@ def main():
     total_files = sum(r["total"] for r in with_zip)
     ok_files = sum(r["ok"] for r in with_zip)
     fail_files = sum(r["fail"] for r in with_zip)
+    dedoubled_files = sum(r["dedoubled"] for r in with_zip)
 
     all_ext = Counter()
     all_ok_ext = Counter()
@@ -150,6 +155,8 @@ def main():
     print(f"  附件文件总数                 : {total_files}")
     print(f"    解析成功                   : {ok_files}  ({ok_files / total_files * 100:.1f}%)" if total_files else "    解析成功: 0")
     print(f"    解析失败                   : {fail_files}  ({fail_files / total_files * 100:.1f}%)" if total_files else "    解析失败: 0")
+    if total_files:
+        print(f"    其中修正「字符重复」        : {dedoubled_files}  ({dedoubled_files / total_files * 100:.1f}%)")
     print("-" * 64)
     print("  按扩展名：")
     for ext, cnt in all_ext.most_common():
@@ -183,6 +190,7 @@ def main():
         "attachment_files_total": total_files,
         "attachment_files_ok": ok_files,
         "attachment_files_failed": fail_files,
+        "attachment_files_dedoubled": dedoubled_files,
         "by_extension": {ext: {"total": c, "ok": all_ok_ext.get(ext, 0)}
                          for ext, c in all_ext.items()},
         "error_reasons": dict(all_errors),

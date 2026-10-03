@@ -82,8 +82,8 @@ def main():
     parser.add_argument(
         "--workers", "-w",
         type=int,
-        default=8,
-        help="并发线程数（默认: 8）",
+        default=config.PROCESS_MAX_WORKERS,
+        help=f"并发线程数（默认: {config.PROCESS_MAX_WORKERS}）",
     )
     parser.add_argument(
         "--resume",

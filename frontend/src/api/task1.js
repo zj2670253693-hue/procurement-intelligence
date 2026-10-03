@@ -33,3 +33,13 @@ export function searchEntities(params) {
 export function getEntitiesByAnnouncement(announcementId) {
   return client.get(`/entities/${announcementId}`)
 }
+
+/** 查看公告原文（HTML 正文 + 附件文件清单） */
+export function getAnnouncement(announcementId) {
+  return client.get(`/announcements/${announcementId}`)
+}
+
+/** 按需加载公告附件文本（解析较慢，切到附件页签时再调） */
+export function getAnnouncementAttachments(announcementId) {
+  return client.get(`/announcements/${announcementId}/attachments`)
+}
