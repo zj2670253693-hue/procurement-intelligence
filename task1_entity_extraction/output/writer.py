@@ -9,6 +9,7 @@ from typing import List
 import pandas as pd
 
 from models.schemas import ExtractionResult
+from models.result_io import serialize_extraction_result
 import config
 
 
@@ -66,15 +67,7 @@ class ResultWriter:
     def write_raw_results(self, results: List[ExtractionResult], filename: str = "raw_results.json"):
         """写入原始结果（含 LLM 原始响应，用于调试）"""
         output_path = self.output_dir / filename
-        data = []
-        for r in results:
-            data.append({
-                "announcement_id": r.announcement_id,
-                "success": r.success,
-                "error": r.error_message,
-                "entities": [e.model_dump() for e in r.entities],
-                "extra_info": r.extra_info,
-            })
+        data = [serialize_extraction_result(result) for result in results]
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         print(f"[输出] 原始结果已写入: {output_path}")

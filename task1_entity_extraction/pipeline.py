@@ -19,6 +19,7 @@ from extractor.llm_extractor import LLMExtractor
 from output.writer import ResultWriter
 from evaluation.metrics import Evaluator
 from models.schemas import ExtractionResult, AnnouncementContent
+from models.result_io import parse_extraction_result
 import config
 
 # 抑制 PDF 解析等第三方库的烦冗警告
@@ -316,8 +317,6 @@ class EntityExtractionPipeline:
             (成功结果列表, 已成功的公告ID集合)
         """
         import json
-        from models.schemas import ExtractedEntity, deduplicate_entities
-
         writer = getattr(self, "writer", None)
         output_dir = Path(getattr(writer, "output_dir", config.OUTPUT_DIR))
         checkpoint_path = output_dir / "raw_results.checkpoint.json"
@@ -337,16 +336,9 @@ class EntityExtractionPipeline:
         for item in data:
             if not item.get("success"):
                 continue
-            entities = deduplicate_entities(
-                [ExtractedEntity(**e) for e in item.get("entities", [])]
-            )
-            prev_results.append(ExtractionResult(
-                announcement_id=item["announcement_id"],
-                entities=entities,
-                extra_info=item.get("extra_info") or {},
-                success=True,
-            ))
-            skip_ids.add(item["announcement_id"])
+            result = parse_extraction_result(item)
+            prev_results.append(result)
+            skip_ids.add(result.announcement_id)
 
         return prev_results, skip_ids
 

@@ -18,7 +18,7 @@ import config
 from database.connection import DatabaseManager, DatabaseConfig
 from database.dao import DataRepository
 from data_loader.html_parser import HTMLAnnouncementParser
-from models.schemas import ExtractedEntity, ExtractionResult
+from models.result_io import parse_extraction_result
 
 
 def main():
@@ -53,14 +53,7 @@ def main():
 
     for i, item in enumerate(raw_results, 1):
         aid = item["announcement_id"]
-        entities = [ExtractedEntity(**e) for e in item.get("entities", [])]
-        result = ExtractionResult(
-            announcement_id=aid,
-            entities=entities,
-            extra_info=item.get("extra_info") or {},
-            success=item.get("success", True),
-            error_message=item.get("error") or "",
-        )
+        result = parse_extraction_result(item)
 
         title, raw_text, file_path = "", "", ""
         if html_dir:
