@@ -147,6 +147,79 @@ def test_per_supplier_winning_amount_is_recognized_as_transaction_amount():
     assert [row.total_price for row in result] == ["337.3570000（万元）", "170.1273000（万元）"]
 
 
+PACKAGE_ONLY_SOURCE = (
+    "二、项目名称：虚构信息化设备采购项目\n"
+    "三、中标（成交）信息\n"
+    "供应商名称：虚构供应商甲\n"
+    "中标（成交）金额：337.3570000（万元）\n"
+    "供应商名称：虚构供应商乙\n"
+    "中标（成交）金额：170.1273000（万元）\n"
+    "四、主要标的信息\n"
+    "1 | 虚构供应商甲 | 虚构信息化设备采购项目（第1包）详见附件 | 详见附件 | 详见附件 | 详见附件 | 详见附件\n"
+    "2 | 虚构供应商乙 | 虚构信息化设备采购项目（第2包）详见附件 | 详见附件 | 详见附件 | 详见附件 | 详见附件\n"
+)
+
+
+def test_package_only_announcement_collapses_expanded_detail_rows():
+    """公告只给包级信息时，附件展开出的设备明细不能当成基础层标的物。"""
+    expanded = [
+        ExtractedEntity(product_name=f"虚构设备{i}", brand="虚构品牌", unit_price="1000元", quantity="1台")
+        for i in range(1, 6)
+    ] + [
+        ExtractedEntity(
+            product_name="虚构信息化设备采购项目（第1包）",
+            brand="虚构供应商甲",
+            total_price="337.3570000（万元）",
+        ),
+        ExtractedEntity(
+            product_name="虚构信息化设备采购项目（第2包）",
+            brand="虚构供应商乙",
+            total_price="170.1273000（万元）",
+        ),
+    ]
+
+    result = sanitize_summary_entities(
+        expanded,
+        detail_status="available",
+        source_text=PACKAGE_ONLY_SOURCE,
+    )
+
+    assert len(result) == 2
+    assert all(not row.product_name.startswith("虚构设备") for row in result)
+    assert all("第1包" in row.product_name or "第2包" in row.product_name for row in result)
+    assert sorted(row.total_price for row in result) == ["170.1273000(万元)", "337.3570000(万元)"]
+    assert sorted(row.brand for row in result) == ["虚构供应商乙", "虚构供应商甲"]
+
+
+def test_announcement_listing_items_is_not_collapsed():
+    """正文自己逐条列出标的物时，多行必须原样保留。"""
+    source_text = (
+        "四、主要标的信息\n"
+        "1 | 智慧展示系统 | 1套 | 148000.00元\n"
+        "2 | 智能讲台 | 2台 | 8000.00元\n"
+        "3 | 智能设备集中控制终端 | 1台 | 4000.00元\n"
+        "总中标金额：￥200.743900 万元（人民币）\n"
+    )
+    rows = [
+        ExtractedEntity(product_name="智慧展示系统", unit_price="148000.00元", quantity="1套"),
+        ExtractedEntity(product_name="智能讲台", unit_price="8000.00元", quantity="2台"),
+        ExtractedEntity(product_name="智能设备集中控制终端", unit_price="4000.00元", quantity="1台"),
+    ]
+
+    result = sanitize_summary_entities(
+        rows,
+        detail_status="available",
+        source_text=source_text,
+    )
+
+    assert len(result) == 3
+    assert [row.product_name for row in result] == [
+        "智慧展示系统",
+        "智能讲台",
+        "智能设备集中控制终端",
+    ]
+
+
 def test_extract_summary_applies_deterministic_cleanup(monkeypatch):
     extractor = object.__new__(LLMExtractor)
     response = {
