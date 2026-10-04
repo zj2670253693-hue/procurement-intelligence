@@ -11,8 +11,13 @@ import httpx
 from openai import OpenAI
 
 import config
-from models.schemas import ExtractedEntity, ExtractionResult, deduplicate_entities
-from extractor.prompts import build_extraction_prompt, build_extra_info_prompt
+from models.schemas import DetailStatus, ExtractedEntity, ExtractionResult, deduplicate_entities
+from extractor.prompts import (
+    build_extraction_prompt,
+    build_extra_info_prompt,
+    build_summary_prompt,
+)
+from extractor.summary_rules import sanitize_summary_entities
 
 
 class LLMExtractor:
@@ -67,6 +72,40 @@ class LLMExtractor:
             result.success = False
             result.error_message = str(e)
 
+        return result
+
+    def extract_summary(
+        self,
+        text: str,
+        *,
+        has_tables: bool,
+        detail_status: DetailStatus,
+        announcement_id: str = "",
+    ) -> ExtractionResult:
+        """从 HTML-only 输入提取采购包级基础结果。"""
+        result = ExtractionResult(
+            announcement_id=announcement_id,
+            detail_status=detail_status,
+        )
+        try:
+            system_prompt, user_prompt = build_summary_prompt(
+                text,
+                has_tables=has_tables,
+                detail_status=detail_status,
+            )
+            response_text = self._call_llm(system_prompt, user_prompt)
+            result.raw_response = response_text
+            result.entities = sanitize_summary_entities(
+                self._parse_entities(response_text),
+                detail_status=detail_status,
+                source_text=text,
+            )
+            if not result.entities:
+                result.success = False
+                result.error_message = "未能从 LLM 响应中解析出采购包级实体"
+        except Exception as exc:
+            result.success = False
+            result.error_message = str(exc)
         return result
 
     def extract_extra_info(self, text: str, announcement_id: str = "") -> Dict[str, Any]:

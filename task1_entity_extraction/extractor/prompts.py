@@ -3,6 +3,46 @@ LLM 提示工程模板
 用于从政府采购公告文本中提取 7 个核心字段
 """
 
+
+SUMMARY_SYSTEM_PROMPT = """你是政府采购中标/成交公告的采购包汇总专家。
+
+请只根据公告正文和正文表格，输出采购包级基础结果，不要展开附件中的设备或服务明细。
+
+规则：
+1. 每个采购包只输出一条；未分包时整篇公告只输出一条。
+2. 产品服务名称采用正文明确的采购标的或采购包名称，并保留区分包件所需的编号。
+3. 品目只提取正文明确出现的编码或类别，不自行分类。
+4. 品牌（产品供应商）在采购包汇总层优先填写该包明确对应的中标或成交供应商，不用某一个设备品牌代表整包。
+5. 规格型号、单价、数量只填正文明确的单一包级值；“详见附件”等引用文字不要直接输出。
+6. 总价只填写明确的中标金额、成交金额、中标价或成交价。不得把预算、最高限价、折扣率、下浮率相乘或推算成成交金额。
+7. 找不到的字段使用空字符串，不推测、不编造。
+
+严格输出 JSON，不要附加解释：
+{
+  "entities": [
+    {
+      "product_name": "采购包级产品服务名称",
+      "category": "正文明确品目",
+      "brand": "该包中标或成交供应商",
+      "spec_model": "正文明确包级规格",
+      "unit_price": "正文明确包级单价",
+      "quantity": "正文明确包级数量",
+      "total_price": "明确中标或成交金额"
+    }
+  ]
+}
+"""
+
+
+SUMMARY_USER_PROMPT_TEMPLATE = """请从以下公告正文中提取采购包级基础结果：
+
+---公告正文开始---
+{announcement_text}
+---公告正文结束---
+
+附件状态：{detail_status}
+请严格输出规定的 JSON。"""
+
 # ============================================================
 # 系统提示词：定义角色和任务
 # ============================================================
@@ -106,6 +146,21 @@ def build_extraction_prompt(text: str, has_tables: bool = False) -> tuple:
     if has_tables:
         user_prompt += TABLE_CONTENT_NOTE
     return SYSTEM_PROMPT, user_prompt
+
+
+def build_summary_prompt(
+    text: str,
+    has_tables: bool = False,
+    detail_status: str = "no_attachment",
+) -> tuple[str, str]:
+    """构建只面向公告正文的采购包汇总 Prompt。"""
+    user_prompt = SUMMARY_USER_PROMPT_TEMPLATE.format(
+        announcement_text=text,
+        detail_status=detail_status,
+    )
+    if has_tables:
+        user_prompt += "\n正文包含使用“ | ”分隔的 HTML 表格，请按采购包合并重复信息。"
+    return SUMMARY_SYSTEM_PROMPT, user_prompt
 
 
 def build_extra_info_prompt(text: str) -> tuple:
