@@ -553,6 +553,16 @@ class EntityExtractionPipeline:
 
         return all_results
 
+    def _resolve_raw_path(self, raw_output_filename: str) -> Path:
+        """解析原始结果路径，带目录的名字不会被再拼一次输出目录。"""
+        writer = getattr(self, "writer", None)
+        if writer is None:
+            output_dir = Path(config.OUTPUT_DIR)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            writer = ResultWriter(output_dir)
+            self.writer = writer
+        return writer._resolve_output_path(raw_output_filename)
+
     def _load_previous_results(
         self,
         explicit_path: str | None = None,
@@ -576,7 +586,7 @@ class EntityExtractionPipeline:
             else (
                 checkpoint_path
                 if checkpoint_path.exists()
-                else output_dir / raw_output_filename
+                else self._resolve_raw_path(raw_output_filename)
             )
         )
         if not raw_path.exists():
