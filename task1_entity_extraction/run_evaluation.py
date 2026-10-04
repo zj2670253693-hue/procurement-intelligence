@@ -14,61 +14,20 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import pandas as pd
-
 import config
 from evaluation.metrics import Evaluator
+from evaluation.ground_truth import (
+    GroundTruthFormatError,
+    load_ground_truth as _load_ground_truth,
+)
 from models.schemas import ExtractedEntity, ExtractionResult
 
-FIELDS = ["product_name", "category", "brand", "spec_model",
-          "unit_price", "quantity", "total_price"]
-FIELD_LABELS = [config.FIELD_LABELS[f] for f in FIELDS]
-
-
-REVIEWED_VERDICTS = {
-    "正确", "错误", "修改", "已修改", "新增",
-    "删除", "删除该行", "delete", "该公告无标的物", "无标的物",
-}
-
-
 def load_ground_truth(xlsx_path: Path, require_reviewed: bool = True) -> list:
-    """从人工核验过的 Excel 读取标准答案"""
-    df = pd.read_excel(xlsx_path, sheet_name="标注(待核验)").fillna("")
-
-    if require_reviewed:
-        verdicts = df["核验结论"].astype(str).str.strip()
-        unreviewed = df.index[~verdicts.isin(REVIEWED_VERDICTS)].tolist()
-        if unreviewed:
-            preview = "、".join(str(i + 2) for i in unreviewed[:10])
-            raise ValueError(
-                f"验证集还有 {len(unreviewed)} 行未完成人工核验"
-                f"（Excel 行号示例：{preview}）。请先填写“核验结论”，"
-                "或仅在调试时使用 --allow-unreviewed。"
-            )
-
-    gt = {}
-    dropped = 0
-    for _, row in df.iterrows():
-        aid = str(row.get("公告ID", "")).strip()
-        if not aid:
-            continue
-
-        verdict = str(row.get("核验结论", "")).strip()
-        if verdict in ("删除", "删除该行", "delete"):
-            dropped += 1
-            continue
-
-        entity = {f: str(row.get(label, "")).strip()
-                  for f, label in zip(FIELDS, FIELD_LABELS)}
-        if not any(entity.values()):
-            continue
-
-        gt.setdefault(aid, {"announcement_id": aid, "entities": []})
-        gt[aid]["entities"].append(entity)
-
-    if dropped:
-        print(f"[验证集] 按核验结论删除了 {dropped} 行")
-    return list(gt.values())
+    """兼容旧调用：按文件后缀读取人工金标。"""
+    return _load_ground_truth(
+        Path(xlsx_path),
+        require_reviewed=require_reviewed,
+    )
 
 
 def load_predictions(raw_path: Path) -> list:
@@ -102,7 +61,7 @@ def main():
 
     try:
         ground_truths = load_ground_truth(xlsx_path, require_reviewed=not allow_unreviewed)
-    except ValueError as e:
+    except GroundTruthFormatError as e:
         print(f"[错误] {e}")
         sys.exit(1)
     predictions = load_predictions(raw_path)
