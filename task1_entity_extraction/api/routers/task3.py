@@ -111,8 +111,14 @@ def _run_task(task_id: str, work_dir: Path, run_extraction: bool):
             task_manager.update(task_id, done=done, success=success_count)
             if result.entities:
                 task_manager.add_entities(task_id, len(result.entities))
+            if result.detail_entities:
+                task_manager.add_detail_entities(task_id, len(result.detail_entities))
 
-        results = pipeline.process_directory(str(work_dir), progress_callback=on_progress)
+        results = pipeline.process_directory(
+            str(work_dir),
+            progress_callback=on_progress,
+            run_mode="both",
+        )
 
         if pipeline.db:
             pipeline.db.close()
@@ -125,9 +131,17 @@ def _run_task(task_id: str, work_dir: Path, run_extraction: bool):
 
         ok = sum(1 for r in results if r.success)
         entities = sum(len(r.entities) for r in results)
+        detail_entities = sum(len(r.detail_entities) for r in results)
         task_manager.update(
-            task_id, status="done", message="处理完成",
-            done=len(results), success=ok, entities=entities,
+            task_id,
+            status="done",
+            message=(
+                f"处理完成：基础结果 {entities} 条，附件明细 {detail_entities} 条"
+            ),
+            done=len(results),
+            success=ok,
+            entities=entities,
+            detail_entities=detail_entities,
             result_file=str(config.OUTPUT_DIR / f"{out_name}.csv"),
         )
 

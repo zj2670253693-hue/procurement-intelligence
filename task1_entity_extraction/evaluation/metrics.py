@@ -59,7 +59,7 @@ class Evaluator:
             pred_entities = [e.model_dump() for e in pred.entities] if pred else []
 
             # 先做实体对齐，避免因输出顺序不同导致全盘错配
-            pairs, unmatched_pred, unmatched_gt = self._align(pred_entities, gt_entities)
+            pairs, unmatched_pred, unmatched_gt = self.align_entities(pred_entities, gt_entities)
 
             # 对齐上的实体：逐字段比对
             for pi, gi in pairs:
@@ -68,7 +68,7 @@ class Evaluator:
                     gt_val = str(gt_entities[gi].get(field, "")).strip()
                     if not pred_val and not gt_val:
                         continue
-                    if pred_val and gt_val and self._field_match(pred_val, gt_val, field):
+                    if pred_val and gt_val and self.field_match(pred_val, gt_val, field):
                         tp += 1
                         field_stats[field]["tp"] += 1
                     else:
@@ -122,7 +122,7 @@ class Evaluator:
             correct_fields=tp,
         )
 
-    def _align(
+    def align_entities(
         self,
         pred_entities: List[Dict],
         gt_entities: List[Dict],
@@ -150,7 +150,7 @@ class Evaluator:
                 for f in gt_non_empty:
                     pv = str(pe.get(f, "")).strip()
                     gv = str(ge.get(f, "")).strip()
-                    if pv and self._field_match(pv, gv, f):
+                    if pv and self.field_match(pv, gv, f):
                         hit += 1
                 if hit > 0:
                     scored.append((hit / len(gt_non_empty), hit, pi, gi))
@@ -171,7 +171,7 @@ class Evaluator:
         unmatched_gt = [i for i in range(len(gt_entities)) if i not in used_gt]
         return pairs, unmatched_pred, unmatched_gt
 
-    def _field_match(self, pred: str, gt: str, field: str = "") -> bool:
+    def field_match(self, pred: str, gt: str, field: str = "") -> bool:
         """按字段类型判断两个值是否匹配，避免“数字碰巧相同”的误判。"""
         norm_pred = self._normalize_text(pred)
         norm_gt = self._normalize_text(gt)
@@ -194,6 +194,18 @@ class Evaluator:
                 return True
 
         return False
+
+    def _align(
+        self,
+        pred_entities: List[Dict],
+        gt_entities: List[Dict],
+    ) -> Tuple[List[Tuple[int, int]], List[int], List[int]]:
+        """Backward-compatible alias for :meth:`align_entities`."""
+        return self.align_entities(pred_entities, gt_entities)
+
+    def _field_match(self, pred: str, gt: str, field: str = "") -> bool:
+        """Backward-compatible alias for :meth:`field_match`."""
+        return self.field_match(pred, gt, field)
 
     @staticmethod
     def _normalize_text(text: str) -> str:

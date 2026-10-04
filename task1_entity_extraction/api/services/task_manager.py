@@ -33,6 +33,7 @@ class TaskManager:
                 "done": 0,
                 "success": 0,
                 "entities": 0,
+                "detail_entities": 0,
                 "message": "任务已创建，等待处理",
                 "result_file": "",
                 "created_at": now,
@@ -53,6 +54,14 @@ class TaskManager:
             task = self._tasks.get(task_id)
             if task:
                 task["entities"] += n
+                task["updated_at"] = datetime.now().isoformat(timespec="seconds")
+
+    def add_detail_entities(self, task_id: str, n: int):
+        """累计附件行级明细数量。"""
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if task:
+                task["detail_entities"] += n
                 task["updated_at"] = datetime.now().isoformat(timespec="seconds")
 
     def get(self, task_id: str) -> Optional[Dict]:

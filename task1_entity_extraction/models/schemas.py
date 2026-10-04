@@ -4,7 +4,7 @@
 """
 import re
 import unicodedata
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal
 from pydantic import BaseModel, Field
 
 
@@ -49,10 +49,31 @@ class ExtractedEntity(BaseModel):
         }
 
 
+DetailStatus = Literal[
+    "available",
+    "missing",
+    "unreadable",
+    "no_attachment",
+    "extraction_failed",
+]
+
+
+class DetailedEntity(ExtractedEntity):
+    """附件中的行级标的物，以及用于追溯的来源信息。"""
+
+    package_name: str = Field("", description="所属采购包名称或编号")
+    source_file: str = Field("", description="来源附件文件名")
+    source_page: str = Field("", description="来源页码，无法确定时为空")
+
+
 ENTITY_FIELDS = (
     "product_name", "category", "brand", "spec_model",
     "unit_price", "quantity", "total_price",
 )
+
+
+def _normalized_entity_value(value: str) -> str:
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", value or ""))
 
 
 def deduplicate_entities(entities: List[ExtractedEntity]) -> List[ExtractedEntity]:
@@ -60,9 +81,27 @@ def deduplicate_entities(entities: List[ExtractedEntity]) -> List[ExtractedEntit
     unique = []
     seen = set()
     for entity in entities:
-        key = tuple(
-            re.sub(r"\s+", "", unicodedata.normalize("NFKC", getattr(entity, field) or ""))
-            for field in ENTITY_FIELDS
+        key = tuple(_normalized_entity_value(getattr(entity, field)) for field in ENTITY_FIELDS)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(entity)
+    return unique
+
+
+def deduplicate_detail_entities(
+    entities: List[DetailedEntity],
+) -> List[DetailedEntity]:
+    """在同一采购包内按七字段去重，并保留首次出现的来源。"""
+    unique = []
+    seen = set()
+    for entity in entities:
+        key = (
+            _normalized_entity_value(entity.package_name),
+            *(
+                _normalized_entity_value(getattr(entity, field))
+                for field in ENTITY_FIELDS
+            ),
         )
         if key in seen:
             continue
@@ -74,7 +113,19 @@ def deduplicate_entities(entities: List[ExtractedEntity]) -> List[ExtractedEntit
 class ExtractionResult(BaseModel):
     """单篇公告的完整提取结果"""
     announcement_id: str = Field(..., description="公告ID")
+    schema_version: int = Field(2, description="结果结构版本")
     entities: List[ExtractedEntity] = Field(default_factory=list, description="提取到的标的物列表")
+    detail_entities: List[DetailedEntity] = Field(
+        default_factory=list,
+        description="从附件提取的行级明细",
+    )
+    detail_status: Optional[DetailStatus] = Field(
+        None,
+        description="附件明细状态；旧结果迁移前允许为空",
+    )
+    detail_error_message: str = Field("", description="附件明细失败或局部失败信息")
+    summary_input_hash: str = Field("", description="基础层输入 SHA-256")
+    detail_input_hash: str = Field("", description="明细层输入 SHA-256")
     extra_info: Dict[str, Any] = Field(default_factory=dict, description="额外信息（任务二需要的字段等）")
     raw_response: str = Field("", description="LLM 原始返回（用于调试）")
     success: bool = Field(True, description="是否提取成功")

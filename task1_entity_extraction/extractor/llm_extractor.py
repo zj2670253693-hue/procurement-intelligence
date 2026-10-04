@@ -11,8 +11,22 @@ import httpx
 from openai import OpenAI
 
 import config
-from models.schemas import ExtractedEntity, ExtractionResult, deduplicate_entities
-from extractor.prompts import build_extraction_prompt, build_extra_info_prompt
+from models.schemas import (
+    DetailStatus,
+    DetailedEntity,
+    ExtractedEntity,
+    ExtractionResult,
+    deduplicate_detail_entities,
+    deduplicate_entities,
+)
+from extractor.prompts import (
+    build_detail_prompt,
+    build_extraction_prompt,
+    build_extra_info_prompt,
+    build_summary_prompt,
+)
+from extractor.detail_processing import chunk_attachment_text
+from extractor.summary_rules import sanitize_summary_entities
 
 
 class LLMExtractor:
@@ -68,6 +82,122 @@ class LLMExtractor:
             result.error_message = str(e)
 
         return result
+
+    def extract_summary(
+        self,
+        text: str,
+        *,
+        has_tables: bool,
+        detail_status: DetailStatus,
+        announcement_id: str = "",
+    ) -> ExtractionResult:
+        """从 HTML-only 输入提取采购包级基础结果。"""
+        result = ExtractionResult(
+            announcement_id=announcement_id,
+            detail_status=detail_status,
+        )
+        try:
+            system_prompt, user_prompt = build_summary_prompt(
+                text,
+                has_tables=has_tables,
+                detail_status=detail_status,
+            )
+            response_text = self._call_llm(system_prompt, user_prompt)
+            result.raw_response = response_text
+            result.entities = sanitize_summary_entities(
+                self._parse_entities(response_text),
+                detail_status=detail_status,
+                source_text=text,
+            )
+            if not result.entities:
+                result.success = False
+                result.error_message = "未能从 LLM 响应中解析出采购包级实体"
+        except Exception as exc:
+            result.success = False
+            result.error_message = str(exc)
+        return result
+
+    def extract_details(
+        self,
+        *,
+        texts: dict[str, str],
+        tables: dict[str, list],
+        announcement_id: str = "",
+    ) -> tuple[list[DetailedEntity], DetailStatus, str]:
+        """按附件和分块提取行级明细，允许局部文件失败。"""
+        details = []
+        failures = []
+        source_files = list(dict.fromkeys([*texts.keys(), *tables.keys()]))
+
+        for source_file in source_files:
+            parts = []
+            text = str(texts.get(source_file) or "").strip()
+            if text:
+                parts.append(text)
+            for table in tables.get(source_file) or []:
+                rows = [
+                    " | ".join(str(cell or "").strip() for cell in row)
+                    for row in table
+                    if row
+                ]
+                if rows:
+                    parts.append("\n".join(rows))
+            source_text = "\n\n".join(parts)
+            chunks = chunk_attachment_text(source_text)
+            if not chunks:
+                failures.append(f"{source_file}: 没有可提取内容")
+                continue
+
+            for chunk_index, chunk in enumerate(chunks, start=1):
+                try:
+                    system_prompt, user_prompt = build_detail_prompt(
+                        chunk,
+                        source_file=source_file,
+                        has_tables=bool(tables.get(source_file)),
+                    )
+                    response_text = self._call_llm(system_prompt, user_prompt)
+                    data = self._parse_json_response(response_text) or {}
+                    raw_items = data.get("detail_entities", data.get("entities", []))
+                    if not isinstance(raw_items, list):
+                        raise ValueError("detail_entities 必须是数组")
+                    for item in raw_items:
+                        if not isinstance(item, dict):
+                            continue
+                        detail = DetailedEntity(
+                            package_name=str(item.get("package_name", "")).strip(),
+                            source_file=source_file,
+                            source_page=str(item.get("source_page", "")).strip(),
+                            product_name=str(item.get("product_name", "")).strip(),
+                            category=str(item.get("category", "")).strip(),
+                            brand=str(item.get("brand", "")).strip(),
+                            spec_model=str(item.get("spec_model", "")).strip(),
+                            unit_price=str(item.get("unit_price", "")).strip(),
+                            quantity=str(item.get("quantity", "")).strip(),
+                            total_price=str(item.get("total_price", "")).strip(),
+                        )
+                        if any(
+                            getattr(detail, field)
+                            for field in (
+                                "product_name",
+                                "category",
+                                "brand",
+                                "spec_model",
+                                "unit_price",
+                                "quantity",
+                                "total_price",
+                            )
+                        ):
+                            details.append(detail)
+                except Exception as exc:
+                    failures.append(f"{source_file}#分块{chunk_index}: {exc}")
+
+        details = deduplicate_detail_entities(details)
+        error_message = "；".join(failures)
+        if details:
+            return details, "available", error_message
+        if not error_message:
+            error_message = "附件中未提取到有效明细"
+        return [], "extraction_failed", error_message
 
     def extract_extra_info(self, text: str, announcement_id: str = "") -> Dict[str, Any]:
         """提取任务二需要的额外信息（项目名称、采购单位、中标供应商等）"""

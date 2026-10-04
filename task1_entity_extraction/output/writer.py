@@ -3,12 +3,14 @@
 将提取结果写入 CSV / Excel / JSON 文件
 """
 import json
+import os
 from pathlib import Path
 from typing import List
 
 import pandas as pd
 
 from models.schemas import ExtractionResult
+from models.result_io import serialize_extraction_result
 import config
 
 
@@ -63,18 +65,33 @@ class ResultWriter:
         print(f"[输出] 结果已写入: {output_path}（共 {len(all_records)} 条记录）")
         return str(output_path)
 
+    def _resolve_output_path(self, filename: str) -> Path:
+        """Resolve a raw-result name without nesting a given directory twice.
+
+        ``filename`` may be a bare name (placed in ``output_dir``), may repeat
+        the output directory name (``output/raw.json``), or may be absolute.
+        Directory parts are kept relative to ``output_dir`` so a caller can
+        never end up writing ``output/output/raw.json``.
+        """
+        candidate = Path(filename)
+        if candidate.is_absolute():
+            output_path = candidate
+        elif candidate.parent == Path("."):
+            output_path = self.output_dir / candidate
+        else:
+            parts = list(candidate.parts)
+            while len(parts) > 1 and parts[0] == self.output_dir.name:
+                parts.pop(0)
+            output_path = self.output_dir.joinpath(*parts)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        return output_path
+
     def write_raw_results(self, results: List[ExtractionResult], filename: str = "raw_results.json"):
-        """写入原始结果（含 LLM 原始响应，用于调试）"""
-        output_path = self.output_dir / filename
-        data = []
-        for r in results:
-            data.append({
-                "announcement_id": r.announcement_id,
-                "success": r.success,
-                "error": r.error_message,
-                "entities": [e.model_dump() for e in r.entities],
-                "extra_info": r.extra_info,
-            })
-        with open(output_path, "w", encoding="utf-8") as f:
+        """原子写入双层原始结果；不落盘模型原始响应。"""
+        output_path = self._resolve_output_path(filename)
+        data = [serialize_extraction_result(result) for result in results]
+        temp_path = output_path.with_name(f".{output_path.name}.tmp")
+        with open(temp_path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(temp_path, output_path)
         print(f"[输出] 原始结果已写入: {output_path}")

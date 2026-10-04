@@ -80,13 +80,40 @@ class DatabaseManager:
         return self
 
     def init_tables(self):
-        """初始化所有表"""
+        """初始化所有表，并幂等补齐旧库缺失的双层状态列。"""
         if not self._conn:
             raise RuntimeError("数据库未连接，请先调用 connect()")
         with self._conn.cursor() as cursor:
             for ddl in ALL_TABLES:
                 cursor.execute(ddl)
+            detail_columns = {
+                "detail_status": "VARCHAR(32) NULL COMMENT '附件明细状态'",
+                "detail_error_message": "TEXT COMMENT '附件明细解析或提取错误'",
+            }
+            for column, definition in detail_columns.items():
+                cursor.execute(
+                    "SHOW COLUMNS FROM announcements LIKE %s",
+                    (column,),
+                )
+                if not cursor.fetchone():
+                    cursor.execute(
+                        f"ALTER TABLE announcements ADD COLUMN {column} {definition}"
+                    )
+        self._conn.commit()
         print(f"[数据库] 已初始化 {len(ALL_TABLES)} 张表")
+
+    @contextmanager
+    def transaction(self):
+        """把多个 DAO 写入包装为同一事务，异常时完整回滚。"""
+        if not self._conn:
+            raise RuntimeError("数据库未连接，请先调用 connect()")
+        self._conn.begin()
+        try:
+            yield self
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
 
     @contextmanager
     def cursor(self):
