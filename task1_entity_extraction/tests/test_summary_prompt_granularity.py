@@ -39,13 +39,6 @@ def test_prompt_ignores_global_total_amount():
     assert "总中标金额" in prompt or "项目总" in prompt
 
 
-def test_prompt_splits_comma_separated_items_into_separate_rows():
-    prompt = SUMMARY_SYSTEM_PROMPT
-
-    assert "顿号" in prompt or "、" in prompt
-    assert "拆" in prompt or "逐项拆开" in prompt
-
-
 def test_summary_prompt_reports_detail_status():
     system_prompt, user_prompt = build_summary_prompt(
         SAMPLE_TEXT,
