@@ -3,6 +3,7 @@
 将提取结果写入 CSV / Excel / JSON 文件
 """
 import json
+import os
 from pathlib import Path
 from typing import List
 
@@ -65,9 +66,11 @@ class ResultWriter:
         return str(output_path)
 
     def write_raw_results(self, results: List[ExtractionResult], filename: str = "raw_results.json"):
-        """写入原始结果（含 LLM 原始响应，用于调试）"""
+        """原子写入双层原始结果；不落盘模型原始响应。"""
         output_path = self.output_dir / filename
         data = [serialize_extraction_result(result) for result in results]
-        with open(output_path, "w", encoding="utf-8") as f:
+        temp_path = output_path.with_name(f".{output_path.name}.tmp")
+        with open(temp_path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(temp_path, output_path)
         print(f"[输出] 原始结果已写入: {output_path}")

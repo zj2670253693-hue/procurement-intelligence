@@ -28,7 +28,16 @@ from pipeline import EntityExtractionPipeline
 import config
 
 
-def main():
+def load_include_ids(path: Path) -> set[str]:
+    """读取一行一个公告 ID 的私有筛选文件，并拒绝重复值。"""
+    values = [line.strip() for line in Path(path).read_text(encoding="utf-8-sig").splitlines()]
+    values = [value for value in values if value]
+    if len(values) != len(set(values)):
+        raise ValueError("公告 ID 清单中存在重复值")
+    return set(values)
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="任务一：实体识别与自动化提取 - 政府采购公告信息提取"
     )
@@ -90,14 +99,49 @@ def main():
         action="store_true",
         help="断点续跑：跳过已成功处理的公告，仅重跑失败项并合并历史结果",
     )
+    parser.add_argument(
+        "--mode",
+        choices=["summary", "details", "both"],
+        default="both",
+        help="提取层：采购包汇总、附件明细或两者",
+    )
+    parser.add_argument(
+        "--previous-results",
+        default=None,
+        help="用于迁移或保留未运行层的历史 raw results JSON",
+    )
+    parser.add_argument(
+        "--raw-output",
+        default="raw_results.json",
+        help="双层原始结果文件名（默认 raw_results.json）",
+    )
+    parser.add_argument(
+        "--include-ids-file",
+        default=None,
+        help="可选的一行一个公告 ID 清单，只处理这些公告",
+    )
 
-    args = parser.parse_args()
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
 
     # 检查输入路径
     input_path = Path(args.input)
     if not input_path.exists():
         print(f"[错误] 输入路径不存在: {args.input}")
-        sys.exit(1)
+        return 1
+
+    try:
+        include_ids = (
+            load_include_ids(Path(args.include_ids_file))
+            if args.include_ids_file
+            else None
+        )
+    except (OSError, ValueError) as exc:
+        print(f"[错误] 无法读取公告 ID 清单: {exc}")
+        return 1
 
     # 创建 pipeline
     try:
@@ -115,7 +159,7 @@ def main():
         print("  1. 创建 .env 文件，设置 QWEN_API_KEY=xxx 或 DEEPSEEK_API_KEY=xxx")
         print("  2. 设置环境变量")
         print("  3. 命令行传入 --api-key xxx")
-        sys.exit(1)
+        return 1
 
     # 运行
     pipeline.run(
@@ -124,8 +168,13 @@ def main():
         output_format=args.format,
         ground_truth_path=args.ground_truth,
         resume=args.resume,
+        run_mode=args.mode,
+        previous_results_path=args.previous_results,
+        raw_output_filename=args.raw_output,
+        include_ids=include_ids,
     )
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
