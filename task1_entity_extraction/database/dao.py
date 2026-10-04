@@ -3,7 +3,13 @@
 """
 from typing import List, Dict, Optional
 from database.connection import DatabaseManager
-from models.schemas import ExtractionResult, ExtractedEntity, deduplicate_entities
+from models.schemas import (
+    DetailedEntity,
+    ExtractionResult,
+    ExtractedEntity,
+    deduplicate_detail_entities,
+    deduplicate_entities,
+)
 
 
 class AnnouncementDAO:
@@ -13,20 +19,38 @@ class AnnouncementDAO:
         self.db = db
 
     def upsert(self, announcement_id: str, title: str = "", file_path: str = "",
-               raw_text: str = "", status: str = "done", error_message: str = ""):
+               raw_text: str = "", status: str = "done", error_message: str = "",
+               detail_status: str | None = None,
+               detail_error_message: str = ""):
         """插入或更新公告记录"""
         sql = """
-            INSERT INTO announcements (announcement_id, title, file_path, raw_text, status, error_message)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO announcements
+                (announcement_id, title, file_path, raw_text, status, error_message,
+                 detail_status, detail_error_message)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
                 title = VALUES(title),
                 file_path = VALUES(file_path),
                 raw_text = VALUES(raw_text),
                 status = VALUES(status),
-                error_message = VALUES(error_message)
+                error_message = VALUES(error_message),
+                detail_status = VALUES(detail_status),
+                detail_error_message = VALUES(detail_error_message)
         """
         with self.db.cursor() as cur:
-            cur.execute(sql, (announcement_id, title, file_path, raw_text, status, error_message))
+            cur.execute(
+                sql,
+                (
+                    announcement_id,
+                    title,
+                    file_path,
+                    raw_text,
+                    status,
+                    error_message,
+                    detail_status,
+                    detail_error_message,
+                ),
+            )
 
     def get(self, announcement_id: str) -> Optional[Dict]:
         sql = "SELECT * FROM announcements WHERE announcement_id = %s"
@@ -136,6 +160,85 @@ class EntityDAO:
             return cur.fetchone()["cnt"]
 
 
+class DetailEntityDAO:
+    """附件行级明细数据访问；基础 `EntityDAO` 的语义保持不变。"""
+
+    def __init__(self, db: DatabaseManager):
+        self.db = db
+
+    def save_details(self, announcement_id: str, items: List[DetailedEntity]) -> None:
+        items = deduplicate_detail_entities(items)
+        with self.db.cursor() as cur:
+            cur.execute(
+                "DELETE FROM extracted_entity_details WHERE announcement_id = %s",
+                (announcement_id,),
+            )
+        if not items:
+            return
+        sql = """
+            INSERT INTO extracted_entity_details
+                (announcement_id, package_name, product_name, category, brand,
+                 spec_model, unit_price, quantity, total_price, source_file, source_page)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """
+        rows = [
+            (
+                announcement_id,
+                item.package_name,
+                item.product_name,
+                item.category,
+                item.brand,
+                item.spec_model,
+                item.unit_price,
+                item.quantity,
+                item.total_price,
+                item.source_file,
+                item.source_page,
+            )
+            for item in items
+        ]
+        with self.db.cursor() as cur:
+            cur.executemany(sql, rows)
+
+    def list_by_announcement(self, announcement_id: str) -> List[Dict]:
+        sql = "SELECT * FROM extracted_entity_details WHERE announcement_id = %s ORDER BY id"
+        with self.db.cursor() as cur:
+            cur.execute(sql, (announcement_id,))
+            return cur.fetchall()
+
+    @staticmethod
+    def _search_where(keyword: str = "") -> tuple[str, list]:
+        if not keyword:
+            return "", []
+        like = f"%{keyword}%"
+        return (
+            " WHERE product_name LIKE %s OR brand LIKE %s"
+            " OR spec_model LIKE %s OR category LIKE %s",
+            [like, like, like, like],
+        )
+
+    def search(self, keyword: str = "", limit: int = 100, offset: int = 0) -> List[Dict]:
+        where, params = self._search_where(keyword)
+        sql = f"SELECT * FROM extracted_entity_details{where} ORDER BY id LIMIT %s OFFSET %s"
+        with self.db.cursor() as cur:
+            cur.execute(sql, params + [limit, offset])
+            return cur.fetchall()
+
+    def count_search(self, keyword: str = "") -> int:
+        where, params = self._search_where(keyword)
+        with self.db.cursor() as cur:
+            cur.execute(
+                f"SELECT COUNT(*) AS cnt FROM extracted_entity_details{where}",
+                params,
+            )
+            return cur.fetchone()["cnt"]
+
+    def count_all(self) -> int:
+        with self.db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS cnt FROM extracted_entity_details")
+            return cur.fetchone()["cnt"]
+
+
 class ProjectDAO:
     """项目关系数据访问（任务二）"""
 
@@ -201,6 +304,7 @@ class DataRepository:
         self.db = db
         self.announcements = AnnouncementDAO(db)
         self.entities = EntityDAO(db)
+        self.details = DetailEntityDAO(db)
         self.projects = ProjectDAO(db)
 
     def save_extraction_result(
@@ -211,34 +315,40 @@ class DataRepository:
         file_path: str = "",
     ):
         """保存完整的提取结果（公告 + 标的物 + 项目关系）"""
+        if result.detail_status is None:
+            raise ValueError("detail_status 未解析，拒绝正式保存")
+
         aid = result.announcement_id
 
-        # 1. 保存公告元数据
-        status = "done" if result.success else "failed"
-        self.announcements.upsert(
-            announcement_id=aid,
-            title=title,
-            file_path=file_path,
-            raw_text=raw_text,
-            status=status,
-            error_message=result.error_message,
-        )
-
-        # 2. 保存提取的标的物
-        self.entities.save_entities(aid, result.entities)
-
-        # 3. 保存项目关系（任务二需要的额外信息）
-        if result.extra_info:
-            info = result.extra_info
-            self.projects.upsert_project(
+        with self.db.transaction():
+            # 1. 保存公告元数据和两层状态
+            status = "done" if result.success else "failed"
+            self.announcements.upsert(
                 announcement_id=aid,
-                project_name=info.get("project_name", ""),
-                procurement_unit=info.get("procurement_unit", ""),
-                winning_supplier=info.get("winning_supplier", ""),
-                project_amount=info.get("project_amount", ""),
+                title=title,
+                file_path=file_path,
+                raw_text=raw_text,
+                status=status,
+                error_message=result.error_message,
+                detail_status=result.detail_status,
+                detail_error_message=result.detail_error_message,
             )
-            # 保存投标人
-            bidders = info.get("bidders", [])
-            winner = info.get("winning_supplier", "")
-            if bidders:
-                self.projects.save_bidders(aid, bidders, winner)
+
+            # 2. 基础采购包与附件行级明细原子替换
+            self.entities.save_entities(aid, result.entities)
+            self.details.save_details(aid, result.detail_entities)
+
+            # 3. 保存项目关系（任务二需要的额外信息）
+            if result.extra_info:
+                info = result.extra_info
+                self.projects.upsert_project(
+                    announcement_id=aid,
+                    project_name=info.get("project_name", ""),
+                    procurement_unit=info.get("procurement_unit", ""),
+                    winning_supplier=info.get("winning_supplier", ""),
+                    project_amount=info.get("project_amount", ""),
+                )
+                bidders = info.get("bidders", [])
+                winner = info.get("winning_supplier", "")
+                if bidders:
+                    self.projects.save_bidders(aid, bidders, winner)
