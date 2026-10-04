@@ -54,14 +54,37 @@ def load_predictions(raw_path: Path) -> list[ExtractionResult]:
         raise ValueError(f"提取结果不是合法 UTF-8 JSON: {raw_path.name}") from exc
     if not isinstance(data, list):
         raise ValueError("提取结果 JSON 顶层必须是数组")
-    return [
-        ExtractionResult(
-            announcement_id=item["announcement_id"],
-            entities=[ExtractedEntity(**entity) for entity in item.get("entities", [])],
-            success=item.get("success", True),
-        )
-        for item in data
-    ]
+
+    predictions = []
+    for index, item in enumerate(data, start=1):
+        if not isinstance(item, dict):
+            raise ValueError(f"提取结果第 {index} 项必须是对象")
+
+        announcement_id = item.get("announcement_id")
+        if not isinstance(announcement_id, str) or not announcement_id.strip():
+            raise ValueError(
+                f"提取结果第 {index} 项缺少非空 announcement_id"
+            )
+
+        entities = item.get("entities", [])
+        if not isinstance(entities, list):
+            raise ValueError(f"提取结果第 {index} 项的 entities 必须是数组")
+        if any(not isinstance(entity, dict) for entity in entities):
+            raise ValueError(
+                f"提取结果第 {index} 项的 entities 只能包含对象"
+            )
+
+        try:
+            predictions.append(
+                ExtractionResult(
+                    announcement_id=announcement_id.strip(),
+                    entities=[ExtractedEntity(**entity) for entity in entities],
+                    success=item.get("success", True),
+                )
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"提取结果第 {index} 项字段格式无效: {exc}") from exc
+    return predictions
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

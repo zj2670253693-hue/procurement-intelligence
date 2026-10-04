@@ -4,6 +4,7 @@ from pathlib import Path
 from conftest import FIELDS, make_review_case, make_review_item, write_review_json
 from run_evaluation import (
     evaluate_files,
+    load_predictions,
     main,
     parse_args,
     write_error_csv,
@@ -183,3 +184,19 @@ def test_main_custom_outputs_leave_legacy_report_unchanged(tmp_path):
     assert report_path.exists()
     assert errors_path.exists()
     assert legacy_path.read_text(encoding="utf-8") == "legacy-100-percent"
+
+
+def test_load_predictions_rejects_malformed_entries_with_clear_error(tmp_path):
+    predictions_path = tmp_path / "predictions.json"
+    predictions_path.write_text(
+        json.dumps([{"entities": []}, "not-an-object"], ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    try:
+        load_predictions(predictions_path)
+    except ValueError as exc:
+        assert "第 1 项" in str(exc)
+        assert "announcement_id" in str(exc)
+    else:
+        raise AssertionError("malformed predictions should be rejected")
