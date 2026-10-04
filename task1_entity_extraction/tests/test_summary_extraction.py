@@ -111,10 +111,40 @@ def test_summary_prompt_requires_package_granularity_and_supplier_brand():
         detail_status="no_attachment",
     )
 
-    assert "每个采购包只输出一条" in system_prompt
+    assert "每条标的物输出一条" in system_prompt
     assert "中标或成交供应商" in system_prompt
     assert "不得" in system_prompt and "预算" in system_prompt
     assert "采购包一成交供应商为虚构供应商" in user_prompt
+
+
+def test_announcement_level_total_amount_is_recognized_as_transaction_amount():
+    result = sanitize_summary_entities(
+        [ExtractedEntity(product_name="虚构项目", total_price="507.4843万元")],
+        detail_status="missing",
+        source_text="总中标金额 | ￥507.484300 万元（人民币）",
+    )
+
+    assert result[0].total_price == "507.4843万元"
+
+
+def test_per_supplier_winning_amount_is_recognized_as_transaction_amount():
+    source_text = (
+        "三、中标（成交）信息\n"
+        "供应商名称：虚构供应商甲\n"
+        "中标（成交）金额：337.3570000（万元）\n"
+        "供应商名称：虚构供应商乙\n"
+        "中标（成交）金额：170.1273000（万元）\n"
+    )
+    result = sanitize_summary_entities(
+        [
+            ExtractedEntity(product_name="虚构项目（第1包）", total_price="337.3570000（万元）"),
+            ExtractedEntity(product_name="虚构项目（第2包）", total_price="170.1273000（万元）"),
+        ],
+        detail_status="missing",
+        source_text=source_text,
+    )
+
+    assert [row.total_price for row in result] == ["337.3570000（万元）", "170.1273000（万元）"]
 
 
 def test_extract_summary_applies_deterministic_cleanup(monkeypatch):
