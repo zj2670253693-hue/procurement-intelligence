@@ -101,9 +101,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--mode",
-        choices=["summary", "details", "both"],
+        choices=["legacy", "summary", "details", "both"],
         default="both",
-        help="提取层：采购包汇总、附件明细或两者",
+        help=(
+            "提取层：legacy=HTML+附件单层基础层（与人工金标同粒度，评分用）；"
+            "summary=仅HTML的采购包/标的物汇总层；details=附件明细层；both=summary+details"
+        ),
     )
     parser.add_argument(
         "--previous-results",

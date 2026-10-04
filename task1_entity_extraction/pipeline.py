@@ -30,7 +30,7 @@ from models.result_io import parse_extraction_result
 import config
 
 
-RunMode = Literal["summary", "details", "both"]
+RunMode = Literal["summary", "details", "both", "legacy"]
 
 
 def _stable_hash(value) -> str:
@@ -319,12 +319,51 @@ class EntityExtractionPipeline:
         result.schema_version = 2
         result.detail_status = detail_status
 
-        # 3. 基础层：严格只使用 HTML，附件正文永不进入该提示词。
+        # 3. 基础层：
+        #    - legacy：用「HTML + 附件」单层提取，粒度与人工金标一致（评分口径）；
+        #    - summary / both：严格只使用 HTML 的采购包/标的物汇总层。
         summary_source = build_summary_source(content.html_text, content.html_tables)
         summary_hash = _stable_hash(
             {"text": summary_source, "detail_status": detail_status}
         )
-        if run_mode in {"summary", "both"}:
+        if run_mode == "legacy":
+            legacy_hash = _stable_hash(
+                {
+                    "text": content.full_text,
+                    "has_tables": bool(content.html_tables) or bool(content.attachment_tables),
+                }
+            )
+            legacy_is_current = bool(
+                resume
+                and original_previous
+                and original_previous.success
+                and original_previous.summary_input_hash == legacy_hash
+                and original_previous.entities
+            )
+            if legacy_is_current:
+                result.entities = original_previous.entities
+                result.success = True
+                result.error_message = original_previous.error_message
+            else:
+                legacy = self.extractor.extract(
+                    text=content.full_text,
+                    has_tables=bool(content.html_tables) or bool(content.attachment_tables),
+                    announcement_id=announcement_id,
+                )
+                if legacy.success:
+                    result.entities = legacy.entities
+                    result.success = True
+                    result.error_message = ""
+                elif original_previous and original_previous.entities:
+                    result.entities = original_previous.entities
+                    result.success = True
+                    result.error_message = f"legacy rerun failed: {legacy.error_message}"
+                else:
+                    result.entities = []
+                    result.success = False
+                    result.error_message = legacy.error_message
+            result.summary_input_hash = legacy_hash
+        elif run_mode in {"summary", "both"}:
             summary_is_current = bool(
                 resume
                 and previous_is_verified_v2
@@ -367,7 +406,7 @@ class EntityExtractionPipeline:
             }
         )
         parser_error = parse_outcome.error_message if parse_outcome else ""
-        if run_mode in {"details", "both"} and detail_status == "available":
+        if run_mode in {"details", "both", "legacy"} and detail_status == "available":
             details_are_current = bool(
                 resume
                 and original_previous
@@ -406,7 +445,7 @@ class EntityExtractionPipeline:
                     if message
                 )
             result.detail_input_hash = detail_hash
-        elif run_mode in {"details", "both"}:
+        elif run_mode in {"details", "both", "legacy"}:
             result.detail_entities = []
             result.detail_status = detail_status
             result.detail_error_message = parser_error
