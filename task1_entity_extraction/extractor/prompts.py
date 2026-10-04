@@ -43,6 +43,38 @@ SUMMARY_USER_PROMPT_TEMPLATE = """请从以下公告正文中提取采购包级�
 附件状态：{detail_status}
 请严格输出规定的 JSON。"""
 
+
+DETAIL_SYSTEM_PROMPT = """你是政府采购附件明细提取专家。
+
+只提取当前附件中逐项列出的设备、产品或服务明细，不输出整篇公告或采购包汇总行。每条明细保留其明确出现的采购包名称；无法判断时留空。只提取原文明确值，不推测、不计算金额。
+
+严格输出 JSON：
+{
+  "detail_entities": [
+    {
+      "package_name": "采购包名称或空字符串",
+      "product_name": "产品服务名称",
+      "category": "品目",
+      "brand": "品牌或产品供应商",
+      "spec_model": "规格型号",
+      "unit_price": "单价",
+      "quantity": "数量",
+      "total_price": "总价",
+      "source_page": "页码或空字符串"
+    }
+  ]
+}
+"""
+
+
+DETAIL_USER_PROMPT_TEMPLATE = """请从附件“{source_file}”的以下内容中提取行级明细：
+
+---附件内容开始---
+{attachment_text}
+---附件内容结束---
+
+请严格输出规定的 JSON。"""
+
 # ============================================================
 # 系统提示词：定义角色和任务
 # ============================================================
@@ -161,6 +193,22 @@ def build_summary_prompt(
     if has_tables:
         user_prompt += "\n正文包含使用“ | ”分隔的 HTML 表格，请按采购包合并重复信息。"
     return SUMMARY_SYSTEM_PROMPT, user_prompt
+
+
+def build_detail_prompt(
+    text: str,
+    *,
+    source_file: str,
+    has_tables: bool = False,
+) -> tuple[str, str]:
+    """构建单个附件分块的明细提取 Prompt。"""
+    user_prompt = DETAIL_USER_PROMPT_TEMPLATE.format(
+        source_file=source_file,
+        attachment_text=text,
+    )
+    if has_tables:
+        user_prompt += "\n内容含使用“ | ”分隔的附件表格，请按表格行提取。"
+    return DETAIL_SYSTEM_PROMPT, user_prompt
 
 
 def build_extra_info_prompt(text: str) -> tuple:
