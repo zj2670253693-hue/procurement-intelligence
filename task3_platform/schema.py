@@ -29,6 +29,7 @@ _BODIES = {
       received_bytes BIGINT UNSIGNED NOT NULL DEFAULT 0,
       expanded_bytes BIGINT UNSIGNED NOT NULL DEFAULT 0,
       reserved_bytes BIGINT UNSIGNED NOT NULL DEFAULT 0,
+      guest_source_hash CHAR(64) CHARACTER SET ascii NULL,
       used_calls BIGINT UNSIGNED NOT NULL DEFAULT 0,
       reserved_input_tokens BIGINT UNSIGNED NOT NULL DEFAULT 0,
       reserved_output_tokens BIGINT UNSIGNED NOT NULL DEFAULT 0,
