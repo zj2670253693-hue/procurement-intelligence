@@ -91,8 +91,8 @@ def run_parse_child(prepared, limits, *, pulse=lambda: None):
     request_path.write_bytes(canonical_bytes(request))
     temporary_root = reject_link_ancestors(parent / (prepared.announcement_id + ".tmp"))
     temporary_root.mkdir(exist_ok=True, mode=0o700)
-    environment = {key: value for key, value in os.environ.items() if key in
-                   {"PATH", "SystemRoot", "WINDIR", "TEMP", "TMP", "LANG", "LC_ALL"}}
+    environment = {key: value for key, value in os.environ.items() if key.upper() in
+                   {"PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "LANG", "LC_ALL"}}
     environment.update(PYTHONPATH=os.pathsep.join((str(ROOT), str(ROOT / "task1_entity_extraction"))),
                        PYTHONUTF8="1", PYTHONDONTWRITEBYTECODE="1", PYTHON_DOTENV_DISABLED="1",
                        TEMP=str(temporary_root), TMP=str(temporary_root), TMPDIR=str(temporary_root))
