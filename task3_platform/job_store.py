@@ -192,7 +192,9 @@ class JobStore:
                 runtime = self._runtime(cursor)
                 if runtime["active_task_id"]:
                     return None
-                cursor.execute("SELECT * FROM t3_jobs WHERE status='queued' AND cancel_requested=FALSE ORDER BY accepted_at,task_id LIMIT 1 FOR UPDATE")
+                cursor.execute("SELECT COUNT(*) AS n FROM t3_inference_attempts WHERE state IN ('sent','uncertain')")
+                uncertainty_gate = " AND mode='parse_only'" if cursor.fetchone()["n"] else ""
+                cursor.execute("SELECT * FROM t3_jobs WHERE status='queued' AND cancel_requested=FALSE" + uncertainty_gate + " ORDER BY accepted_at,task_id LIMIT 1 FOR UPDATE")
                 row = cursor.fetchone()
                 if row:
                     lease = Lease(row["task_id"], row["epoch"] + 1, worker_token)
@@ -241,7 +243,7 @@ class JobStore:
             cursor.execute("SELECT * FROM t3_item_checkpoints WHERE task_id=%s", (task_id,))
             rows = cursor.fetchall()
         return {row["announcement_id"]: Checkpoint(*(row[key] for key in (
-            "announcement_id", "input_fingerprint", "processing_fingerprint", "result_sha256", "db_state"))) for row in rows}
+            "announcement_id", "input_fingerprint", "processing_fingerprint", "result_sha256", "db_state", "epoch"))) for row in rows}
 
     def request_cancel(self, actor, task_id):
         with transaction(self.connection) as cursor:
@@ -283,7 +285,8 @@ class JobStore:
             for row in cursor.fetchall():
                 cursor.execute("SELECT COUNT(*) AS n FROM t3_inference_attempts WHERE task_id=%s AND state IN ('sent','uncertain')", (row["task_id"],))
                 uncertain = cursor.fetchone()["n"] > 0
-                status = "needs_confirmation" if uncertain else ("cancelled" if row["cancel_requested"] else "queued")
+                expired_wall = row["started_at"] and (_utc(self.clock()) - _utc(row["started_at"])).total_seconds() > self.limits.job_seconds
+                status = "needs_confirmation" if uncertain else ("cancelled" if row["cancel_requested"] else ("failed" if expired_wall else "queued"))
                 if uncertain:
                     cursor.execute("UPDATE t3_inference_attempts SET state='uncertain',error_code='lease_expired' WHERE task_id=%s AND state='sent'", (row["task_id"],))
                 cursor.execute("UPDATE t3_jobs SET status=%s,epoch=epoch+1,worker_token=NULL,lease_until=NULL,finished_at=%s WHERE task_id=%s",

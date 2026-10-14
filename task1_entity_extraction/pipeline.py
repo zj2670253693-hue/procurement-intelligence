@@ -93,15 +93,20 @@ class EntityExtractionPipeline:
         extract_extra: bool = True,
         db_enabled: bool = None,
         max_workers: int = 8,
+        *, writer=None, progress_path=None, call_transport=None,
+        html_parser_factory=None, attachment_parser_factory=None,
     ):
-        self.html_parser = HTMLAnnouncementParser()
+        self.html_parser = (html_parser_factory or HTMLAnnouncementParser)()
+        self.attachment_parser_factory = attachment_parser_factory
+        self.progress_path = progress_path
         self.extractor = LLMExtractor(
             provider=llm_provider,
             api_key=api_key,
             base_url=base_url,
             model=model,
+            **({"call_transport": call_transport} if call_transport is not None else {}),
         )
-        self.writer = ResultWriter()
+        self.writer = writer if writer is not None else ResultWriter()
         self.evaluator = Evaluator()
         self.extract_extra = extract_extra  # 是否同时提取任务二需要的额外字段
         self.max_workers = max_workers  # 并发线程数
@@ -188,7 +193,7 @@ class EntityExtractionPipeline:
         start_time = time.time()
         done_count = 0
         success_count = 0
-        progress_file = config.OUTPUT_DIR / "progress.txt"
+        progress_file = Path(getattr(self, "progress_path", None) or config.OUTPUT_DIR / "progress.txt")
         checkpoint_results = list(checkpoint_results or [])
         previous_by_id = {
             result.announcement_id: result
@@ -294,7 +299,7 @@ class EntityExtractionPipeline:
         if matching_zip.exists():
             # AttachmentParser 会记录本次解析状态；并发任务各用独立实例，
             # 避免多个线程共享可变列表造成统计串扰。
-            attachment_parser = AttachmentParser()
+            attachment_parser = (getattr(self, "attachment_parser_factory", None) or AttachmentParser)()
             parse_outcome = attachment_parser.parse_zip_with_status(
                 str(matching_zip),
                 announcement_id,

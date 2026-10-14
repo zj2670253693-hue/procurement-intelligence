@@ -168,6 +168,7 @@ class Checkpoint:
     processing_fingerprint: str
     result_sha256: str
     db_state: str
+    epoch: int = 0
 
 
 @dataclass(frozen=True)

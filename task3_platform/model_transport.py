@@ -2,6 +2,8 @@
 from dataclasses import replace
 from decimal import Decimal
 import threading
+import time
+from concurrent.futures import Future, TimeoutError as FutureTimeout
 from openai import OpenAI
 
 from models.inference import InferenceHalt, InferenceResponse
@@ -42,7 +44,7 @@ class UnverifiedCounter:
 
 
 class LedgerTransport:
-    def __init__(self, store, policy, backend, counter):
+    def __init__(self, store, policy, backend, counter, *, pulse=None):
         self.store = store
         self.policy = policy
         self.backend = backend
@@ -50,6 +52,32 @@ class LedgerTransport:
         self.task_id = store.lease.task_id
         self._lock = threading.Lock()
         self._halted = None
+        self.pulse = pulse
+
+    def _send(self, request):
+        timeout = self.store.jobs.limits.model_seconds
+        if self.pulse is None:
+            return self.backend.send(request, timeout=timeout)
+        future = Future()
+        def network_only():
+            try:
+                future.set_result(self.backend.send(request, timeout=timeout))
+            except BaseException as error:
+                future.set_exception(error)
+        threading.Thread(target=network_only, daemon=True).start()
+        started = time.monotonic()
+        while True:
+            remaining = timeout - (time.monotonic() - started)
+            if remaining <= 0:
+                raise TimeoutError("model_deadline")
+            try:
+                response = future.result(timeout=min(self.store.jobs.limits.heartbeat_seconds, remaining))
+                self.pulse()
+                return response
+            except FutureTimeout:
+                if future.done():
+                    return future.result()
+                self.pulse()
 
     def __call__(self, request):
         with self._lock:
@@ -72,9 +100,11 @@ class LedgerTransport:
                     return self.store.response(attempt.attempt_id)
                 # Recheck server authorization immediately before the committed send marker.
                 self.policy.authorize(self.store.job_row(), request)
+                if self.pulse:
+                    self.pulse()
                 self.store.mark_sent(attempt.attempt_id)
                 sent = True
-                response = self.backend.send(request, timeout=self.store.jobs.limits.model_seconds)
+                response = self._send(request)
                 self.store.record_response(attempt.attempt_id, response)
                 return response
             except BaseException as exc:
