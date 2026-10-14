@@ -41,7 +41,8 @@ app.add_middleware(
 )
 
 app.include_router(task1.router)
-app.include_router(task3.router)
+from task3_platform.web import install as install_task3
+install_task3(app, Path(__file__).resolve().parent.parent)
 
 from task2_query_service.integration import install as install_task2
 install_task2(app, Path(__file__).resolve().parent.parent)

@@ -190,7 +190,17 @@ def main():
         aid = record.get("announcement_id")
         if aid not in sources:
             raise PlatformError("export_unknown_announcement", 409)
-        for diagnostic in record.get("diagnostics", []):
+        diagnostics=record.get("diagnostics", [])
+        flags=diagnostics if isinstance(diagnostics,dict) else record.get("processing_diagnostics",{})
+        checks={"schema_valid":(False,"invalid_model_schema"),"extra_valid":(False,"extra_extraction_failed"),
+                "coverage_gap":(True,"source_target_coverage_gap"),"parser_partial":(True,"attachment_parse_incomplete"),
+                "detail_partial":(True,"detail_extraction_incomplete")}
+        for key,(bad,code) in checks.items():
+            if isinstance(flags,dict) and flags.get(key) is bad:
+                errors.append({"announcement_id":aid,"code":code})
+        if record.get("failed_attachments"):
+            errors.append({"announcement_id":aid,"code":"attachment_parse_incomplete"})
+        for diagnostic in diagnostics if isinstance(diagnostics,list) else []:
             code = diagnostic.get("code") if isinstance(diagnostic, dict) else diagnostic
             if isinstance(code, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,127}", code):
                 errors.append({"announcement_id": aid, "code": code})

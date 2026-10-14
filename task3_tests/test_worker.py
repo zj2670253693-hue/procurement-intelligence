@@ -86,6 +86,23 @@ def test_worker_parse_only_and_complete_are_distinct(worker_setup, clock):
     assert json.loads((paths.task(job.task_id).extraction / "items/1/t20990101_1.json").read_bytes())["validated_only"] is True
 
 
+def test_resumed_parse_keeps_previous_partial_attachment_state(worker_setup,clock):
+    module,jobs,job,steps,paths=worker_setup(count=2)
+    original=steps.parse
+    def partial_first(prepared,pulse):
+        parsed=original(prepared,pulse)
+        if prepared.announcement_id.endswith("_1"):
+            parsed.attachments.failed_files.append("synthetic.pdf")
+        return parsed
+    steps.parse=partial_first
+    steps.interrupt_aid="t20990101_2"
+    with pytest.raises(KeyboardInterrupt): module.ProcessingWorker(jobs,steps,clock).run_once()
+    steps.interrupt_aid=None
+    clock.advance(61)
+    resumed=module.ProcessingWorker(jobs,steps,clock).run_once()
+    assert resumed.status=="partial"
+
+
 def test_worker_receipt_allocation_cannot_bypass_disk_quota(worker_setup, clock):
     module, jobs, job, steps, paths = worker_setup()
     jobs.limits = replace(jobs.limits, request_bytes=32, chunk_bytes=16, file_bytes=32,

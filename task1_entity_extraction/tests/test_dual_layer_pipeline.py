@@ -363,11 +363,10 @@ def test_cli_parses_dual_layer_options_and_rejects_duplicate_ids(tmp_path):
 
 
 def test_upload_task_reports_summary_and_detail_counts(tmp_path, monkeypatch):
-    from api.routers import task3
-    from api.services.task_manager import TaskManager
-
-    manager = TaskManager()
-    task_id = manager.create("fictional", total_files=1, run_extraction=True)
+    from types import SimpleNamespace
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from task3_platform.web import install
     result = ExtractionResult(
         announcement_id="fictional-010",
         entities=[ExtractedEntity(product_name="采购包一")],
@@ -378,34 +377,10 @@ def test_upload_task_reports_summary_and_detail_counts(tmp_path, monkeypatch):
         detail_status="available",
     )
 
-    class FakePipeline:
-        def __init__(self, **_kwargs):
-            self.db = None
-
-        def process_directory(self, _path, progress_callback=None, **_kwargs):
-            progress_callback(1, 1, 1, result)
-            return [result]
-
-    class FakeWriter:
-        def __init__(self, *_args, **_kwargs):
-            pass
-
-        def write(self, *_args, **_kwargs):
-            return "fictional.csv"
-
-        def write_raw_results(self, *_args, **_kwargs):
-            return "fictional.json"
-
-    monkeypatch.setattr(task3, "task_manager", manager)
-    monkeypatch.setattr(sys.modules["pipeline"], "EntityExtractionPipeline", FakePipeline)
-    monkeypatch.setattr(sys.modules["output.writer"], "ResultWriter", FakeWriter)
-    monkeypatch.setattr(task3.config, "OUTPUT_DIR", tmp_path)
-    # Explicit opt-in is synthetic: the pipeline/writer above are test doubles.
-    monkeypatch.setenv('PAID_INFERENCE_ENABLED','1')
-    monkeypatch.setenv('MODEL_RUN_TOKEN','synthetic-test-only')
-
-    task3._run_task(task_id, tmp_path, run_extraction=True)
-
-    task = manager.get(task_id)
+    # New scoped service reports both counts; compatibility HTTP route does no processing.
+    services=SimpleNamespace(actor=lambda *args,**kwargs:object(),task_dto=lambda *args:{
+        "entities":len(result.entities),"detail_entities":len(result.detail_entities)})
+    app=FastAPI();install(app,tmp_path,services_provider=lambda request:services)
+    task=TestClient(app).get("/api/tasks/"+"a"*32).json()
     assert task["entities"] == 1
     assert task["detail_entities"] == 2

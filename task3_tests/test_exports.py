@@ -119,6 +119,18 @@ def test_partial_diagnostics_are_not_lost(platform_module, export_input):
     assert report["incomplete"] is True
 
 
+def test_pipeline_diagnostic_flags_export_actual_failure_only(platform_module,export_input):
+    module=platform_module("exports")
+    job,inputs,raw,task,*_=export_input
+    data=json.loads(raw.read_bytes())
+    data[0]["diagnostics"]={"schema_valid":True,"extra_valid":False,"coverage_gap":False,"parser_partial":False,"detail_partial":False}
+    data[0]["stage_status"]="partial"
+    raw.write_text(json.dumps(data,ensure_ascii=False),encoding="utf-8")
+    module.build_exports(job,inputs,raw,task.exports)
+    errors=json.loads((task.exports/"errors.json").read_bytes())
+    assert [error["code"] for error in errors]==["extra_extraction_failed"]
+
+
 def test_export_quota_and_retry_same_inputs(platform_module, export_input):
     module = platform_module("exports")
     job, inputs, raw, task, *_ = export_input

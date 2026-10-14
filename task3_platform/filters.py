@@ -8,6 +8,7 @@ FIELDS = ("product_name", "category", "brand", "spec_model", "unit_price", "quan
 NUMERIC = {"unit_price", "quantity", "total_price"}
 UNKNOWN = ("", "无", "未公示", "未公布", "未披露", "未知", "None", "null", "--", "/", "附件缺失", "详见附件", "见附件")
 SCALAR = r"(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]+)?"
+QUANTITY_UNITS=frozenset(("套","批","台","件","个","项","人天","吨","米","平方米","本","辆","张","份"))
 
 
 def numeric_projection(raw, field, *, declared_unit=None):
@@ -44,6 +45,10 @@ class EntityFilters:
     quantity_unit: str | None = None
 
     def __post_init__(self):
+        if any(not isinstance(value,dict) for value in (self.text,self.missing,self.ranges)):
+            raise PlatformError("invalid_entity_filter")
+        if self.quantity_unit is not None and (not isinstance(self.quantity_unit,str) or self.quantity_unit not in QUANTITY_UNITS):
+            raise PlatformError("invalid_quantity_unit")
         if set(self.text) - set(FIELDS) or set(self.missing) - set(FIELDS) or set(self.ranges) - NUMERIC:
             raise PlatformError("invalid_filter_field")
         if any(not isinstance(value, str) or len(value) > 512 for value in self.text.values()):
@@ -51,7 +56,7 @@ class EntityFilters:
         if any(type(value) is not bool for value in self.missing.values()):
             raise PlatformError("invalid_missing_filter")
         for pair in self.ranges.values():
-            if len(pair) != 2 or any(value is not None and (not isinstance(value, (Decimal, int)) or isinstance(value, bool)
+            if not isinstance(pair,(tuple,list)) or len(pair) != 2 or any(value is not None and (not isinstance(value, (Decimal, int)) or isinstance(value, bool)
                      or not Decimal(value).is_finite()) for value in pair):
                 raise PlatformError("invalid_range_filter")
             if pair[0] is not None and pair[1] is not None and pair[0] > pair[1]:

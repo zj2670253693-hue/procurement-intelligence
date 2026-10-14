@@ -257,6 +257,22 @@ class JobStore:
                 cursor.execute("UPDATE t3_jobs SET status='cancelled',finished_at=%s WHERE task_id=%s", (_sql_time(self.clock()), task_id))
             return job_from_row(self._row(cursor, task_id))
 
+    def retry(self, actor, task_id):
+        """Explicit retry reuses confirmed checkpoints and never resets model budgets."""
+        with transaction(self.connection) as cursor:
+            self._runtime(cursor)
+            row=self._row(cursor,task_id,lock=True)
+            require_owner(actor,row["owner_id"])
+            cursor.execute("SELECT COUNT(*) AS n FROM t3_inference_attempts WHERE task_id=%s AND state IN ('sent','uncertain')",(task_id,))
+            if cursor.fetchone()["n"] or row["status"]=="needs_confirmation":
+                raise PlatformError("inference_needs_confirmation",409)
+            if row["status"] not in {"failed","cancelled"} or not row["manifest_json"]:
+                raise PlatformError("task_not_retryable",409)
+            cursor.execute("SELECT COUNT(*) AS n FROM t3_jobs WHERE status='queued'",())
+            if cursor.fetchone()["n"]>=self.limits.queue_size: raise PlatformError("queue_full",503)
+            cursor.execute("UPDATE t3_jobs SET status='queued',cancel_requested=FALSE,epoch=epoch+1,worker_token=NULL,lease_until=NULL,started_at=NULL,finished_at=NULL WHERE task_id=%s",(task_id,))
+            return job_from_row(self._row(cursor,task_id))
+
     def transition(self, lease, status, phase):
         if phase not in PHASES:
             raise PlatformError("invalid_job_phase")

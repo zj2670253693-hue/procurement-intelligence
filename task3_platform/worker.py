@@ -103,7 +103,7 @@ class ProcessingWorker:
                     pulse()
                     if job.mode == "parse_only":
                         item = {"announcement_id": prepared.announcement_id, "validated_only": True,
-                                "input_fingerprint": parsed.input_fingerprint, "stage_status": "complete",
+                                "input_fingerprint": parsed.input_fingerprint, "stage_status": "partial" if parsed.attachments.failed_files else "complete",
                                 "failed_attachments": parsed.attachments.failed_files}
                         sha = self._write_receipt(lease, path, item)
                         self.jobs.checkpoint(lease, prepared.announcement_id, sha, "validated_only")
