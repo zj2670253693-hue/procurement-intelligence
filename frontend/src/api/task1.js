@@ -43,3 +43,7 @@ export function getAnnouncement(announcementId) {
 export function getAnnouncementAttachments(announcementId) {
   return client.get(`/announcements/${announcementId}/attachments`)
 }
+
+export const getStandardItems = (id) => client.get(`/task1/standard-items/${encodeURIComponent(id)}`)
+export const getOfficialNotes = (id) => client.get(`/task1/official-notes/${encodeURIComponent(id)}`)
+export const getAttachmentDetails = (id) => client.get(`/entities/${encodeURIComponent(id)}/details`)

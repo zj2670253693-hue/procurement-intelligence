@@ -125,6 +125,18 @@
       />
 
       <el-tabs v-model="drawer.tab" @tab-change="onTabChange">
+        <el-tab-pane label="比赛标准行（金额：万元）" name="standard">
+          <el-alert v-if="standardItems.error" :title="standardItems.error" type="error" :closable="false" />
+          <el-button v-if="standardItems.error" @click="openAnnouncement(drawer.id)">重试加载</el-button>
+          <el-alert title="标准三表是独立汇总、单位规范化的输出；下方原始基础层和附件候选明细仍保留，不用预算或未知值强行填充。" type="info" :closable="false" />
+          <el-table :data="standardItems.items" stripe max-height="600"><el-table-column v-for="h in standardItems.headers" :key="h" :prop="h" :label="h" min-width="160" /></el-table>
+          <pre class="doc-text">{{ officialNotes }}</pre>
+        </el-tab-pane>
+        <el-tab-pane label="附件候选明细（高级展示）" name="details">
+          <el-alert title="附件行尚未逐条核实为实际中标，可能是预算或采购需求；不计作基础准确率或已发生交易。" type="warning" :closable="false" />
+          <p>解析状态：{{ attachmentDetails.detail_status || '未知' }}；{{ attachmentDetails.detail_error_message }}</p>
+          <el-table :data="attachmentDetails.items" stripe max-height="600"><el-table-column v-for="c in detailColumns" :key="c.prop" :prop="c.prop" :label="c.label" min-width="160" /></el-table>
+        </el-tab-pane>
         <!-- 页签 1：提取结果 -->
         <el-tab-pane :label="`提取结果 (${drawer.rows.length})`" name="entities">
           <el-table v-loading="drawer.loading" :data="drawer.rows" stripe border max-height="600">
@@ -197,6 +209,7 @@ import {
   getAnnouncementAttachments,
   getEntitiesByAnnouncement,
   searchEntities,
+  getStandardItems, getOfficialNotes, getAttachmentDetails,
 } from '../api/task1'
 
 const columns = [
@@ -243,6 +256,11 @@ const drawer = reactive({
 
 const announcement = ref(null)
 const attachmentItems = ref([])
+const standardItems = ref({headers: [], items: []})
+const officialNotes = ref('')
+const attachmentDetails = ref({items: []})
+const detailColumns = [{prop:'package_name',label:'采购包'}, ...columns, {prop:'source_file',label:'来源附件'},{prop:'source_page',label:'页号'}]
+let drawerGeneration = 0
 
 async function load() {
   loading.value = true
@@ -283,6 +301,7 @@ function onPageChange(page) {
 }
 
 async function openAnnouncement(id) {
+  const token=++drawerGeneration
   drawer.visible = true
   drawer.tab = 'entities'
   drawer.loading = true
@@ -294,19 +313,29 @@ async function openAnnouncement(id) {
   drawer.attMessage = ''
   announcement.value = null
   attachmentItems.value = []
+  standardItems.value={headers: [], items: []}
+  officialNotes.value=''
+  attachmentDetails.value={items: []}
 
   try {
     // 标的物与公告原文并行取，原文失败不影响表格展示
-    const [ents, ann] = await Promise.all([
+    const [ents, ann, standard, notes, details] = await Promise.all([
       getEntitiesByAnnouncement(id),
       getAnnouncement(id).catch(() => null),
+      getStandardItems(id).catch(e => ({headers:[],items:[],error:e.message})),
+      getOfficialNotes(id).catch(e => ({error:e.message})),
+      getAttachmentDetails(id).catch(e => ({items:[],detail_error_message:e.message})),
     ])
+    if(token!==drawerGeneration)return
     drawer.rows = ents.items
     announcement.value = ann
+    standardItems.value=standard
+    officialNotes.value=JSON.stringify(notes, null, 2)
+    attachmentDetails.value=details
   } catch (e) {
-    drawer.error = e.message
+    if(token===drawerGeneration)drawer.error = e.message
   } finally {
-    drawer.loading = false
+    if(token===drawerGeneration)drawer.loading = false
   }
 }
 
@@ -315,14 +344,16 @@ async function onTabChange(name) {
   if (name !== 'attachments' || drawer.attLoaded) return
   drawer.attLoaded = true
   drawer.attLoading = true
+  const token=drawerGeneration
   try {
     const data = await getAnnouncementAttachments(drawer.id)
+    if(token!==drawerGeneration)return
     attachmentItems.value = data.items || []
     drawer.attMessage = data.message || ''
   } catch (e) {
-    drawer.attMessage = e.message
+    if(token===drawerGeneration)drawer.attMessage = e.message
   } finally {
-    drawer.attLoading = false
+    if(token===drawerGeneration)drawer.attLoading = false
   }
 }
 

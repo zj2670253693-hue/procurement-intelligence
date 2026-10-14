@@ -14,6 +14,23 @@ import config
 class Evaluator:
     """提取结果评测器"""
 
+    # Only whole scalar expressions are parsed. Never remove a decimal point,
+    # accept malformed grouping, or take the first number of a range/list.
+    _NUMBER = r"[+-]?(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]+)?"
+    _QUANTITY_UNIT = r"平方米|立方米|公斤|小时|台|套|项|人|年|月|日|天|个|批|件|张|吨|米|辆|包|册|本|支|箱|组|块|份|门|部|根|瓶|袋"
+    _RATE_UNIT = r"小时|年|月|日|天|人|台|套|项"
+    _QUANTITY_PATTERN = re.compile(
+        rf"(?P<number>{_NUMBER})\s*(?:(?P<unit>{_QUANTITY_UNIT})|"
+        rf"\(\s*(?P<wrapped_unit>{_QUANTITY_UNIT})\s*\))?"
+    )
+    _AMOUNT_PATTERN = re.compile(
+        rf"(?:人民币\s*|¥\s*)?(?P<number>{_NUMBER})\s*"
+        r"(?:(?P<currency>亿元|万元|元|万)|\(\s*(?P<wrapped_currency>亿元|万元|元|万)\s*\))?\s*"
+        r"(?:\(\s*人民币\s*\))?\s*"
+        rf"(?:(?:/|每)\s*(?:(?P<rate>{_RATE_UNIT})|\(\s*(?P<wrapped_rate>{_RATE_UNIT})\s*\)))?"
+        r"\s*(?:\(\s*人民币\s*\))?"
+    )
+
     # 字段映射：用于对比
     FIELD_KEYS = ["product_name", "category", "brand", "spec_model", "unit_price", "quantity", "total_price"]
 
@@ -59,7 +76,7 @@ class Evaluator:
             pred_entities = [e.model_dump() for e in pred.entities] if pred else []
 
             # 先做实体对齐，避免因输出顺序不同导致全盘错配
-            pairs, unmatched_pred, unmatched_gt = self._align(pred_entities, gt_entities)
+            pairs, unmatched_pred, unmatched_gt = self.align_entities(pred_entities, gt_entities)
 
             # 对齐上的实体：逐字段比对
             for pi, gi in pairs:
@@ -68,7 +85,7 @@ class Evaluator:
                     gt_val = str(gt_entities[gi].get(field, "")).strip()
                     if not pred_val and not gt_val:
                         continue
-                    if pred_val and gt_val and self._field_match(pred_val, gt_val, field):
+                    if pred_val and gt_val and self.field_match(pred_val, gt_val, field):
                         tp += 1
                         field_stats[field]["tp"] += 1
                     else:
@@ -122,7 +139,7 @@ class Evaluator:
             correct_fields=tp,
         )
 
-    def _align(
+    def align_entities(
         self,
         pred_entities: List[Dict],
         gt_entities: List[Dict],
@@ -150,7 +167,7 @@ class Evaluator:
                 for f in gt_non_empty:
                     pv = str(pe.get(f, "")).strip()
                     gv = str(ge.get(f, "")).strip()
-                    if pv and self._field_match(pv, gv, f):
+                    if pv and self.field_match(pv, gv, f):
                         hit += 1
                 if hit > 0:
                     scored.append((hit / len(gt_non_empty), hit, pi, gi))
@@ -171,20 +188,22 @@ class Evaluator:
         unmatched_gt = [i for i in range(len(gt_entities)) if i not in used_gt]
         return pairs, unmatched_pred, unmatched_gt
 
-    def _field_match(self, pred: str, gt: str, field: str = "") -> bool:
+    def field_match(self, pred: str, gt: str, field: str = "") -> bool:
         """按字段类型判断两个值是否匹配，避免“数字碰巧相同”的误判。"""
+        if field in {"quantity", "unit_price", "total_price"}:
+            parser = self._parse_quantity if field == "quantity" else self._parse_amount
+            parsed_pred, parsed_gt = parser(pred), parser(gt)
+            if parsed_pred is not None and parsed_gt is not None:
+                return parsed_pred == parsed_gt
+            # Unknown expressions may match literally, but punctuation carrying
+            # decimal/range/rate meaning must not be erased.
+            return self._numeric_text(pred) == self._numeric_text(gt)
+
         norm_pred = self._normalize_text(pred)
         norm_gt = self._normalize_text(gt)
 
         if norm_pred == norm_gt:
             return True
-
-        # 只有金额字段才按金额比较。旧实现会把“服务器1”和“路由器1”
-        # 因为都含数字 1 而误判为相同。
-        if field in {"unit_price", "total_price"}:
-            amount_pred = self._normalize_amount(pred)
-            amount_gt = self._normalize_amount(gt)
-            return amount_pred is not None and amount_gt is not None and amount_pred == amount_gt
 
         # 名称、品目、品牌和规格允许较强的包含关系，但短片段或差异过大
         # 不算命中，避免用一个通用词匹配整段描述。
@@ -195,6 +214,18 @@ class Evaluator:
 
         return False
 
+    def _align(
+        self,
+        pred_entities: List[Dict],
+        gt_entities: List[Dict],
+    ) -> Tuple[List[Tuple[int, int]], List[int], List[int]]:
+        """Backward-compatible alias for :meth:`align_entities`."""
+        return self.align_entities(pred_entities, gt_entities)
+
+    def _field_match(self, pred: str, gt: str, field: str = "") -> bool:
+        """Backward-compatible alias for :meth:`field_match`."""
+        return self.field_match(pred, gt, field)
+
     @staticmethod
     def _normalize_text(text: str) -> str:
         """统一全半角、大小写、空白和常见分隔符。"""
@@ -202,22 +233,57 @@ class Evaluator:
         return re.sub(r"[^0-9a-z_\u4e00-\u9fff]+", "", text)
 
     @staticmethod
-    def _normalize_amount(text: str) -> Decimal | None:
-        """把元、万元、亿元统一换算成“元”后比较。"""
-        normalized = unicodedata.normalize("NFKC", str(text or "")).replace(",", "")
-        match = re.search(r"[-+]?\d+(?:\.\d+)?", normalized)
-        if not match:
+    def _numeric_text(text: str) -> str:
+        """Keep semantic punctuation and internal numeric separation."""
+        normalized = unicodedata.normalize("NFKC", str(text or ""))
+        return re.sub(r"\s+", " ", normalized).strip()
+
+    @classmethod
+    def _parse_quantity(cls, text: str) -> tuple[Decimal, str] | None:
+        match = cls._QUANTITY_PATTERN.fullmatch(cls._numeric_text(text))
+        if match is None:
             return None
         try:
-            value = Decimal(match.group(0))
+            value = Decimal(match.group("number").replace(",", ""))
         except InvalidOperation:
             return None
+        return value, match.group("unit") or match.group("wrapped_unit") or ""
 
-        if "亿元" in normalized:
-            value *= Decimal("100000000")
-        elif "万元" in normalized or re.search(r"\d万(?:\D|$)", normalized):
-            value *= Decimal("10000")
-        return value.normalize()
+    @classmethod
+    def _parse_amount(cls, text: str) -> tuple[Decimal, str] | None:
+        normalized = cls._numeric_text(text)
+        # Unwrap only explicit supported rate labels at the end, not arbitrary
+        # parentheses/annotations. Complete-expression validation still follows.
+        label_end = r"(?=\s*(?:\(\s*人民币\s*\))?$)"
+        normalized = re.sub(
+            rf"\(\s*(亿元|万元|元|万)\s*(?:/|每)\s*({cls._RATE_UNIT})\s*\){label_end}",
+            r"\1/\2", normalized,
+        )
+        normalized = re.sub(
+            rf"\(\s*(?:/|每)\s*({cls._RATE_UNIT})\s*\){label_end}",
+            r"/\1", normalized,
+        )
+        match = cls._AMOUNT_PATTERN.fullmatch(normalized)
+        if match is None:
+            return None
+        try:
+            value = Decimal(match.group("number").replace(",", ""))
+        except InvalidOperation:
+            return None
+        currency = match.group("currency") or match.group("wrapped_currency") or "元"
+        # Decimal tuple exponent shifting is exact, even for long OCR numbers;
+        # multiplication/normalize() would depend on the active Decimal context.
+        shift = {"元": 0, "万": 4, "万元": 4, "亿元": 8}[currency]
+        parts = value.as_tuple()
+        value = Decimal((parts.sign, parts.digits, parts.exponent + shift))
+        rate = match.group("rate") or match.group("wrapped_rate") or ""
+        return value, rate
+
+    @classmethod
+    def _normalize_amount(cls, text: str) -> Decimal | None:
+        """Compatibility scalar helper; a rate is not a contract total."""
+        parsed = cls._parse_amount(text)
+        return parsed[0] if parsed is not None and not parsed[1] else None
 
     def print_report(self, metrics: EvaluationMetrics):
         """打印评测报告"""

@@ -2,6 +2,7 @@
 MySQL 数据库连接管理
 """
 import os
+import re
 from contextlib import contextmanager
 from typing import Optional
 
@@ -80,13 +81,77 @@ class DatabaseManager:
         return self
 
     def init_tables(self):
-        """初始化所有表"""
+        """初始化所有表，并幂等补齐旧库缺失的双层状态列。"""
         if not self._conn:
             raise RuntimeError("数据库未连接，请先调用 connect()")
         with self._conn.cursor() as cursor:
             for ddl in ALL_TABLES:
                 cursor.execute(ddl)
+            detail_columns = {
+                "detail_status": "VARCHAR(32) NULL COMMENT '附件明细状态'",
+                "detail_error_message": "TEXT COMMENT '附件明细解析或提取错误'",
+            }
+            for column, definition in detail_columns.items():
+                cursor.execute(
+                    "SHOW COLUMNS FROM announcements LIKE %s",
+                    (column,),
+                )
+                if not cursor.fetchone():
+                    cursor.execute(
+                        f"ALTER TABLE announcements ADD COLUMN {column} {definition}"
+                    )
+            self._expand_detail_text_columns(cursor)
+        self._conn.commit()
         print(f"[数据库] 已初始化 {len(ALL_TABLES)} 张表")
+
+    @staticmethod
+    def _expand_detail_text_columns(cursor):
+        """只扩容旧附件明细列，不缩小字段，也不改基础层。
+
+        名称扩容时使用前缀索引，避免 utf8mb4 全列索引超过 MySQL 限制。
+        已更宽的 VARCHAR/TEXT 原样保留；不猜测未知表结构。
+        """
+        columns = (
+            ("product_name", 1024, "产品服务名称"),
+            ("spec_model", 8192, "规格型号"),
+        )
+        for name, capacity, comment in columns:
+            cursor.execute("SHOW COLUMNS FROM extracted_entity_details LIKE %s", (name,))
+            column = cursor.fetchone()
+            kind = str(column.get("Type", "")).lower() if column else ""
+            if kind in ("text", "mediumtext", "longtext"):
+                continue
+            width = re.fullmatch(r"varchar\((\d+)\)", kind)
+            if not width:
+                raise RuntimeError(f"附件明细字段 {name} 类型异常，拒绝自动改写")
+            if int(width[1]) >= capacity:
+                continue
+            clauses = [f"MODIFY COLUMN {name} VARCHAR({capacity}) DEFAULT '' COMMENT '{comment}'"]
+            if name == "product_name":
+                cursor.execute("SHOW INDEX FROM extracted_entity_details WHERE Key_name = 'idx_detail_product'")
+                index = cursor.fetchall()
+                if index and (len(index) != 1 or index[0].get("Column_name") != name
+                              or index[0].get("Non_unique") != 1 or index[0].get("Seq_in_index") != 1):
+                    raise RuntimeError("附件明细名称索引结构异常，拒绝自动改写")
+                prefix = index[0].get("Sub_part") if index else None
+                if not index or prefix is None or prefix > 512:
+                    if index:
+                        clauses.append("DROP INDEX idx_detail_product")
+                    clauses.append("ADD INDEX idx_detail_product (product_name(512))")
+            cursor.execute("ALTER TABLE extracted_entity_details " + ", ".join(clauses))
+
+    @contextmanager
+    def transaction(self):
+        """把多个 DAO 写入包装为同一事务，异常时完整回滚。"""
+        if not self._conn:
+            raise RuntimeError("数据库未连接，请先调用 connect()")
+        self._conn.begin()
+        try:
+            yield self
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
 
     @contextmanager
     def cursor(self):

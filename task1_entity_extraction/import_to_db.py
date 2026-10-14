@@ -7,6 +7,11 @@
 用法：
   python import_to_db.py                         # 只导入 JSON 中的结构化结果
   python import_to_db.py ../benchmark_data/combined   # 同时回填 HTML 原文
+
+含原文证明的跨采购包同名副本时，必须提供同版本 HTML 目录；
+缺少或无法解析来源时仍沿用保守去重，不凭 JSON 绕过校验。
+附件明细仅在同附件、完整且不同的页号可追溯时保留来源副本；
+同页重复、附件名不同或页号不明的组仍按旧规则保留首条。
 """
 import json
 import sys
@@ -18,7 +23,8 @@ import config
 from database.connection import DatabaseManager, DatabaseConfig
 from database.dao import DataRepository
 from data_loader.html_parser import HTMLAnnouncementParser
-from models.schemas import ExtractedEntity, ExtractionResult
+from extractor.summary_rules import build_summary_source
+from models.result_io import parse_extraction_result
 
 
 def main():
@@ -53,16 +59,9 @@ def main():
 
     for i, item in enumerate(raw_results, 1):
         aid = item["announcement_id"]
-        entities = [ExtractedEntity(**e) for e in item.get("entities", [])]
-        result = ExtractionResult(
-            announcement_id=aid,
-            entities=entities,
-            extra_info=item.get("extra_info") or {},
-            success=item.get("success", True),
-            error_message=item.get("error") or "",
-        )
+        result = parse_extraction_result(item)
 
-        title, raw_text, file_path = "", "", ""
+        title, raw_text, file_path, summary_source = "", "", "", ""
         if html_dir:
             html_file = html_dir / f"{aid}.html"
             if html_file.exists():
@@ -71,6 +70,7 @@ def main():
                     content = html_parser.parse_file(str(html_file))
                     title = content.title
                     raw_text = content.html_text
+                    summary_source = build_summary_source(content.html_text, content.html_tables)
                 except Exception:
                     pass
 
@@ -79,6 +79,8 @@ def main():
             title=title,
             raw_text=raw_text,
             file_path=file_path,
+            summary_source=summary_source,
+            preserve_detail_source_pages=True,
         )
 
         if i % 200 == 0 or i == total:

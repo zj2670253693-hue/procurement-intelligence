@@ -11,17 +11,19 @@
 上传后立即返回 task_id，实际提取在后台线程执行，避免 HTTP 请求超时。
 """
 import shutil
+import os
+import hmac
 import zipfile
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, Header, HTTPException, UploadFile
 
 import config
 from api.services.task_manager import task_manager
 
 router = APIRouter(prefix="/api", tags=["任务三：可视化分析检索平台"])
 
-UPLOAD_ROOT = config.OUTPUT_DIR / "uploads"
+UPLOAD_ROOT = Path(os.getenv('APP_UPLOAD_ROOT',str(config.OUTPUT_DIR / 'uploads')))
 ALLOWED_SUFFIXES = {".html", ".htm", ".zip"}
 
 
@@ -97,6 +99,8 @@ def _run_task(task_id: str, work_dir: Path, run_extraction: bool):
             )
             return
 
+        if os.getenv('PAID_INFERENCE_ENABLED','0')!='1' or not os.getenv('MODEL_RUN_TOKEN'):
+            raise PermissionError('付费推理未获服务器授权，后台任务已停止')
         from pipeline import EntityExtractionPipeline
         from output.writer import ResultWriter
 
@@ -111,24 +115,38 @@ def _run_task(task_id: str, work_dir: Path, run_extraction: bool):
             task_manager.update(task_id, done=done, success=success_count)
             if result.entities:
                 task_manager.add_entities(task_id, len(result.entities))
+            if result.detail_entities:
+                task_manager.add_detail_entities(task_id, len(result.detail_entities))
 
-        results = pipeline.process_directory(str(work_dir), progress_callback=on_progress)
+        results = pipeline.process_directory(
+            str(work_dir),
+            progress_callback=on_progress,
+            run_mode="both",
+        )
 
         if pipeline.db:
             pipeline.db.close()
 
         # 结果单独落盘，不覆盖基准数据集的输出文件
         out_name = f"upload_{task_id}"
-        writer = ResultWriter()
+        writer = ResultWriter(output_dir=work_dir/'results')
         writer.write(results, filename=out_name, fmt="csv")
         writer.write_raw_results(results, filename=f"{out_name}_raw.json")
 
         ok = sum(1 for r in results if r.success)
         entities = sum(len(r.entities) for r in results)
+        detail_entities = sum(len(r.detail_entities) for r in results)
         task_manager.update(
-            task_id, status="done", message="处理完成",
-            done=len(results), success=ok, entities=entities,
-            result_file=str(config.OUTPUT_DIR / f"{out_name}.csv"),
+            task_id,
+            status="done",
+            message=(
+                f"处理完成：基础结果 {entities} 条，附件明细 {detail_entities} 条"
+            ),
+            done=len(results),
+            success=ok,
+            entities=entities,
+            detail_entities=detail_entities,
+            result_file=str(work_dir/'results'/f"{out_name}.csv"),
         )
 
     except Exception as e:
@@ -139,7 +157,8 @@ def _run_task(task_id: str, work_dir: Path, run_extraction: bool):
 async def upload_dataset(
     background_tasks: BackgroundTasks,
     files: list[UploadFile] = File(..., description="HTML 文件与同名 zip 附件，或一个数据集整包 zip"),
-    run_extraction: bool = Form(True, description="是否调用大模型提取（false 则仅解析）"),
+    run_extraction: bool = Form(False, description="默认仅解析；付费推理另需服务端授权和Bearer令牌"),
+    authorization: str | None = Header(default=None),
 ):
     """
     接收数据集并启动后台处理
@@ -148,6 +167,11 @@ async def upload_dataset(
       1. 直接多选若干 .html 与同名 .zip 附件
       2. 上传一个内含 html 与 zip 的数据集整包 .zip
     """
+    if run_extraction:
+        token=os.getenv('MODEL_RUN_TOKEN','')
+        if (os.getenv('PAID_INFERENCE_ENABLED','0')!='1' or not token or
+                not hmac.compare_digest(authorization or '', 'Bearer '+token)):
+            raise HTTPException(403,'付费推理未授权；请使用仅解析模式')
     if not files:
         raise HTTPException(status_code=400, detail="未收到任何文件")
 

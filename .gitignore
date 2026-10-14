@@ -50,6 +50,10 @@ task1_entity_extraction/output/*.xlsx
 # 属赛事数据内容，不外传。可由 build_validation_set.py 随时重新生成。
 task1_entity_extraction/output/validation_set/
 
+# 人工审核/仲裁导出属于私有验证数据，不进入仓库
+procurement_initial_review_batch_*.json
+task1_entity_extraction/private_validation/
+
 # ============================================================
 # 编辑器 / 系统
 # ============================================================
@@ -58,3 +62,14 @@ task1_entity_extraction/output/validation_set/
 .DS_Store
 Thumbs.db
 *.log
+
+# Private published datasets/receipts and deployment assets are never public.
+task2_data/
+task2_output/
+run_receipts/
+test-artifacts/
+task1_entity_extraction/release_assets/
+*.private.zip
+deploy/task1-task2/release/
+deploy/task1-task2/runtime-preview/
+deploy/task1-task2/admin-cutover-result.json
