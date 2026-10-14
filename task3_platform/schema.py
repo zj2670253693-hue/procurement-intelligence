@@ -73,6 +73,8 @@ _BODIES = {
       unit_price TEXT NULL, quantity TEXT NULL, total_price TEXT NULL,
       unit_price_numeric DECIMAL(65,30) NULL, quantity_numeric DECIMAL(65,30) NULL,
       total_price_numeric DECIMAL(65,30) NULL, payload_json JSON NOT NULL,
+      unit_price_unit VARCHAR(16) NULL, quantity_unit VARCHAR(16) NULL,
+      total_price_unit VARCHAR(16) NULL,
       PRIMARY KEY(upload_dataset_id,announcement_id,row_no),
       FOREIGN KEY(upload_dataset_id,announcement_id)
         REFERENCES t3_announcements(upload_dataset_id,announcement_id)""",
