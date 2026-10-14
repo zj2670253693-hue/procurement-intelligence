@@ -44,6 +44,7 @@ from extractor.official_qa import apply_official_qa
 from output.writer import ResultWriter
 from evaluation.metrics import Evaluator
 from models.schemas import ExtractionResult, AnnouncementContent
+from models.inference import InferenceHalt
 from models.result_io import parse_extraction_result
 import config
 
@@ -218,6 +219,10 @@ class EntityExtractionPipeline:
                     results.append(result)
                     if result.success:
                         success_count += 1
+                except InferenceHalt:
+                    for pending in futures:
+                        pending.cancel()
+                    raise
                 except Exception as e:
                     print(f"\n[错误] 处理 {html_file.name} 失败: {e}")
                     sys.stdout.flush()

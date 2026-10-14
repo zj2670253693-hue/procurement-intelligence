@@ -5,6 +5,7 @@ LLM 实体提取器
 import json
 import time
 import re
+from decimal import Decimal
 from typing import Optional, Dict, Any
 
 import httpx
@@ -19,6 +20,7 @@ from models.schemas import (
     deduplicate_detail_entities,
     deduplicate_entities,
 )
+from models.inference import InferenceHalt, InferenceRequest, precise_json_loads
 from extractor.prompts import (
     build_detail_prompt,
     build_extraction_prompt,
@@ -42,8 +44,9 @@ from extractor.base_function_spec import clear_base_function_specs
 class LLMExtractor:
     """基于大模型 API 的实体提取器"""
 
-    def __init__(self, provider: str = None, api_key: str = None, base_url: str = None, model: str = None):
+    def __init__(self, provider: str = None, api_key: str = None, base_url: str = None, model: str = None, *, call_transport=None):
         self.provider = (provider or config.LLM_PROVIDER).lower()
+        self.call_transport = call_transport
 
         if self.provider == "qwen":
             self.api_key = api_key or config.QWEN_API_KEY
@@ -56,6 +59,10 @@ class LLMExtractor:
         else:
             raise ValueError(f"不支持的 LLM provider: {self.provider}，请使用 'qwen' 或 'deepseek'")
 
+        if call_transport is not None:
+            self.api_key = None
+            self.client = None
+            return
         if not self.api_key:
             raise ValueError(
                 f"未设置 {self.provider.upper()}_API_KEY。"
@@ -79,7 +86,7 @@ class LLMExtractor:
 
         try:
             system_prompt, user_prompt = build_extraction_prompt(text, has_tables)
-            response_text = self._call_llm(system_prompt, user_prompt)
+            response_text = self._invoke(system_prompt, user_prompt, announcement_id, "base")
             result.raw_response = response_text
             originals = self._parse_entities(response_text)
             result.extra_info["_v12_original_base_names"] = [e.product_name for e in originals]
@@ -106,6 +113,8 @@ class LLMExtractor:
                 result.success = False
                 result.error_message = "未能从 LLM 响应中解析出任何实体"
 
+        except InferenceHalt:
+            raise
         except Exception as e:
             result.success = False
             result.error_message = str(e)
@@ -131,7 +140,7 @@ class LLMExtractor:
                 has_tables=has_tables,
                 detail_status=detail_status,
             )
-            response_text = self._call_llm(system_prompt, user_prompt)
+            response_text = self._invoke(system_prompt, user_prompt, announcement_id, "summary")
             result.raw_response = response_text
             originals = self._parse_entities(response_text)
             result.extra_info["_v12_original_base_names"] = [e.product_name for e in originals]
@@ -143,6 +152,8 @@ class LLMExtractor:
             if not result.entities:
                 result.success = False
                 result.error_message = "未能从 LLM 响应中解析出采购包级实体"
+        except InferenceHalt:
+            raise
         except Exception as exc:
             result.success = False
             result.error_message = str(exc)
@@ -187,7 +198,7 @@ class LLMExtractor:
                         source_file=source_file,
                         has_tables=bool(tables.get(source_file)),
                     )
-                    response_text = self._call_llm(system_prompt, user_prompt)
+                    response_text = self._invoke(system_prompt, user_prompt, announcement_id, "details", source_file, chunk_index)
                     data = self._parse_json_response(response_text) or {}
                     raw_items = data.get("detail_entities", data.get("entities", []))
                     if not isinstance(raw_items, list):
@@ -221,6 +232,8 @@ class LLMExtractor:
                         ):
                             details.append(detail)
                             detail_sources[id(detail)] = chunk
+                except InferenceHalt:
+                    raise
                 except Exception as exc:
                     failures.append(f"{source_file}#分块{chunk_index}: {exc}")
 
@@ -245,10 +258,29 @@ class LLMExtractor:
         """提取任务二需要的额外信息（项目名称、采购单位、中标供应商等）"""
         try:
             system_prompt, user_prompt = build_extra_info_prompt(text)
-            response_text = self._call_llm(system_prompt, user_prompt)
+            response_text = self._invoke(system_prompt, user_prompt, announcement_id, "extra")
             return self._parse_json_response(response_text)
+        except InferenceHalt:
+            raise
         except Exception as e:
             return {"error": str(e)}
+
+    def _invoke(self, system_prompt, user_prompt, announcement_id, layer, source_file="", chunk_index=0):
+        transport = getattr(self, "call_transport", None)
+        if transport is None:
+            # Preserve strict two-positional-argument legacy monkeypatches/subclasses.
+            return self._call_llm(system_prompt, user_prompt)
+        request = InferenceRequest(
+            transport.task_id, announcement_id, layer, source_file, chunk_index,
+            self.provider, self.model,
+            {"temperature": format(Decimal(str(config.LLM_TEMPERATURE)), "f"),
+             "max_tokens": config.LLM_MAX_TOKENS,
+             "base_url": self.base_url,
+             "chunk_policy": {"max_length": config.MAX_TEXT_LENGTH_PER_REQUEST,
+                              "overlap": config.TEXT_CHUNK_OVERLAP}},
+            ({"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}),
+        )
+        return transport(request).content
 
     def _call_llm(self, system_prompt: str, user_prompt: str) -> str:
         """调用 LLM API，带重试机制"""
@@ -267,6 +299,8 @@ class LLMExtractor:
                 )
                 return response.choices[0].message.content
 
+            except InferenceHalt:
+                raise
             except Exception as e:
                 last_error = e
                 if attempt < config.LLM_MAX_RETRIES:
@@ -316,6 +350,15 @@ class LLMExtractor:
 
     def _parse_json_response(self, response_text: str) -> Optional[Dict]:
         """从 LLM 响应文本中解析 JSON（处理 markdown 代码块等情况）"""
+        if getattr(self, "call_transport", None) is not None:
+            candidate = (response_text or "").strip()
+            fenced = re.fullmatch(r"```(?:json)?\s*\n?(.*?)```", candidate, re.DOTALL)
+            if fenced:
+                candidate = fenced.group(1).strip()
+            data = precise_json_loads(candidate)
+            if not isinstance(data, dict):
+                raise ValueError("model_response_must_be_object")
+            return data
         if not response_text:
             return None
 
