@@ -35,7 +35,7 @@ const routes = [
       {
         path: 'task2',
         name: 'task2',
-        component: () => import('../views/ComingSoonView.vue'),
+        component: () => import('../views/RelationshipsView.vue'),
         meta: {
           title: '用户画像建模与关系分析',
           headerDesc: '采购单位 - 中标供应商 - 投标参与方关系分析',

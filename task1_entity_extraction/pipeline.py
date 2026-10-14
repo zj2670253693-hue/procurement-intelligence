@@ -2,24 +2,77 @@
 任务一：主流程编排
 整合数据解析 → 实体提取 → 结果输出（文件 + 数据库）的完整流程
 """
-import os
+import hashlib
+import inspect
+import json
 import time
 import warnings
 import logging
 import threading
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Literal, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from tqdm import tqdm
 
 from data_loader.html_parser import HTMLAnnouncementParser
-from data_loader.attachment_parser import AttachmentParser
+from data_loader.attachment_parser import (
+    AttachmentParseOutcome,
+    AttachmentParser,
+    classify_attachment_status,
+)
 from extractor.llm_extractor import LLMExtractor
+from extractor.detail_processing import migrate_legacy_entities
+from extractor.summary_rules import build_summary_source, build_legacy_source
+from extractor import prompts
+from extractor.category_rules import CATEGORY_RULE_VERSION
+from extractor.spec_rules import SPEC_RULE_VERSION
+from extractor.reference_rules import NUMERIC_REFERENCE_RULE_VERSION
+from extractor.announcement_category import ANNOUNCEMENT_CATEGORY_RULE_VERSION
+from extractor.supplier_rules import SUPPLIER_FILL_RULE_VERSION
+from extractor.quantity_units import QUANTITY_UNIT_RULE_VERSION
+from extractor.total_award_rules import TOTAL_AWARD_RULE_VERSION
+from extractor.base_category_roles import BASE_CATEGORY_ROLE_RULE_VERSION
+from extractor.base_function_spec import BASE_FUNCTION_SPEC_RULE_VERSION
+from extractor.awarded_rate_tiers import AWARDED_RATE_TIER_RULE_VERSION
+from extractor.annual_amount_evidence import ANNUAL_AMOUNT_RULE_VERSION
+from extractor.item_total_evidence import ITEM_TOTAL_RULE_VERSION
+from extractor.cross_package_duplicates import CROSS_PACKAGE_DUPLICATE_RULE_VERSION
+from extractor.consortium_supplier import CONSORTIUM_SUPPLIER_RULE_VERSION
+from extractor.official_qa_money import OFFICIAL_QA_RULE_VERSION
+from extractor.official_qa import apply_official_qa
 from output.writer import ResultWriter
 from evaluation.metrics import Evaluator
 from models.schemas import ExtractionResult, AnnouncementContent
+from models.result_io import parse_extraction_result
 import config
+
+
+RunMode = Literal["summary", "details", "both", "legacy"]
+
+
+def _stable_hash(value) -> str:
+    """为可 JSON 化的层输入生成稳定摘要，供断点续跑判断。"""
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _merge_results(*groups: List[ExtractionResult]) -> List[ExtractionResult]:
+    """按公告 ID 合并结果，后出现的结果覆盖前者并保持稳定顺序。"""
+    ordered_ids = []
+    by_id = {}
+    for group in groups:
+        for result in group or []:
+            if result.announcement_id not in by_id:
+                ordered_ids.append(result.announcement_id)
+            by_id[result.announcement_id] = result
+    return [by_id[announcement_id] for announcement_id in ordered_ids]
 
 # 抑制 PDF 解析等第三方库的烦冗警告
 warnings.filterwarnings("ignore")
@@ -84,9 +137,19 @@ class EntityExtractionPipeline:
             self.db = None
             self.repository = None
 
-    def process_directory(self, dir_path: str, skip_ids: set = None,
-                          progress_callback=None,
-                          checkpoint_results: List[ExtractionResult] = None) -> List[ExtractionResult]:
+    def process_directory(
+        self,
+        dir_path: str,
+        skip_ids: set = None,
+        progress_callback=None,
+        checkpoint_results: List[ExtractionResult] = None,
+        *,
+        run_mode: RunMode = "both",
+        previous_results: List[ExtractionResult] = None,
+        include_ids: set[str] | None = None,
+        resume: bool = False,
+        raw_output_filename: str = "raw_results.json",
+    ) -> List[ExtractionResult]:
         """
         批量处理一个目录下的所有公告（并发处理）
         目录结构：每个公告一个子目录，包含 .html 文件和附件 zip（如有）
@@ -107,6 +170,8 @@ class EntityExtractionPipeline:
             list(dir_path.rglob("*.html")) + list(dir_path.rglob("*.htm")),
             key=lambda p: str(p).lower(),
         )
+        if include_ids is not None:
+            html_files = [f for f in html_files if f.stem in include_ids]
         if skip_ids:
             before = len(html_files)
             html_files = [f for f in html_files if f.stem not in skip_ids]
@@ -124,13 +189,28 @@ class EntityExtractionPipeline:
         success_count = 0
         progress_file = config.OUTPUT_DIR / "progress.txt"
         checkpoint_results = list(checkpoint_results or [])
+        previous_by_id = {
+            result.announcement_id: result
+            for result in (previous_results or [])
+        }
+        use_layer_arguments = bool(previous_by_id) or resume or run_mode != "both"
 
         # 并发处理
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = {
-                executor.submit(self.process_single_file, str(html_file)): html_file
-                for html_file in html_files
-            }
+            futures = {}
+            for html_file in html_files:
+                if use_layer_arguments:
+                    future = executor.submit(
+                        self.process_single_file,
+                        str(html_file),
+                        run_mode=run_mode,
+                        previous_result=previous_by_id.get(html_file.stem),
+                        resume=resume,
+                    )
+                else:
+                    # 保持对旧测试替身及第三方子类的向后兼容。
+                    future = executor.submit(self.process_single_file, str(html_file))
+                futures[future] = html_file
             for future in as_completed(futures):
                 html_file = futures[future]
                 try:
@@ -155,7 +235,16 @@ class EntityExtractionPipeline:
                         pass
                 # 每 10 个文件写一次进度
                 if done_count % 10 == 0 or done_count == total:
-                    self._write_checkpoint(checkpoint_results + results)
+                    checkpoint_data = _merge_results(
+                        checkpoint_results,
+                        list(previous_by_id.values()),
+                        results,
+                    )
+                    self._write_checkpoint(
+                        checkpoint_data,
+                        raw_output_filename=raw_output_filename,
+                        run_mode=run_mode,
+                    )
                     elapsed = time.time() - start_time
                     rate = done_count / elapsed if elapsed > 0 else 0
                     eta = (total - done_count) / rate if rate > 0 else 0
@@ -179,7 +268,14 @@ class EntityExtractionPipeline:
 
         return results
 
-    def process_single_file(self, html_file_path: str) -> ExtractionResult:
+    def process_single_file(
+        self,
+        html_file_path: str,
+        *,
+        run_mode: RunMode = "both",
+        previous_result: ExtractionResult | None = None,
+        resume: bool = False,
+    ) -> ExtractionResult:
         """处理单个公告文件（HTML + 同目录附件）"""
         html_path = Path(html_file_path)
         announcement_id = html_path.stem
@@ -189,39 +285,298 @@ class EntityExtractionPipeline:
 
         # 2. 查找并解析附件（仅匹配与 HTML 同名的 zip 文件）
         matching_zip = html_path.parent / f"{announcement_id}.zip"
+        parse_outcome: AttachmentParseOutcome | None = None
         if matching_zip.exists():
             # AttachmentParser 会记录本次解析状态；并发任务各用独立实例，
             # 避免多个线程共享可变列表造成统计串扰。
             attachment_parser = AttachmentParser()
-            texts, tables = attachment_parser.parse_zip(str(matching_zip), announcement_id)
-            content.attachment_texts.update(texts)
-            content.attachment_tables.update(tables)
-            content.attachment_files.extend(dict.fromkeys([*texts.keys(), *tables.keys()]))
+            parse_outcome = attachment_parser.parse_zip_with_status(
+                str(matching_zip),
+                announcement_id,
+            )
+            content.attachment_texts.update(parse_outcome.texts)
+            content.attachment_tables.update(parse_outcome.tables)
+            content.attachment_files.extend(parse_outcome.archive_files)
 
-        # 3. 实体提取
-        has_tables = bool(content.html_tables) or bool(content.attachment_tables)
-        result = self.extractor.extract(
-            text=content.full_text,
-            has_tables=has_tables,
-            announcement_id=announcement_id,
+        detail_status = classify_attachment_status(
+            content.html_text,
+            matching_zip.exists(),
+            parse_outcome,
         )
 
-        # 4. 提取额外信息（任务二需要）
+        # 兼容旧版自定义提取器：它仍接收 HTML 与附件合并后的单层输入。
+        if not hasattr(self.extractor, "extract_summary"):
+            result = self._extract_legacy(
+                text=build_legacy_source(content),
+                has_tables=bool(content.html_tables) or bool(content.attachment_tables),
+                announcement_id=announcement_id,
+                detail_status=detail_status,
+            )
+            result.detail_status = detail_status
+            if parse_outcome:
+                result.detail_error_message = parse_outcome.error_message
+            return self._finish_single_result(result, content, html_path, summary_source="")
+
+        original_previous = previous_result.model_copy(deep=True) if previous_result else None
+        previous_is_verified_v2 = bool(
+            original_previous
+            and original_previous.schema_version >= 2
+            and original_previous.success
+        )
+        if previous_result:
+            result = migrate_legacy_entities(
+                previous_result.model_copy(deep=True),
+                detail_status=detail_status,
+            )
+        else:
+            result = ExtractionResult(
+                announcement_id=announcement_id,
+                detail_status=detail_status,
+                success=(run_mode != "details"),
+            )
+        result.announcement_id = announcement_id
+        result.schema_version = 2
+        result.detail_status = detail_status
+
+        # 3. 基础层：
+        #    - legacy：用「HTML + 附件」单层提取，粒度与人工金标一致（评分口径）；
+        #    - summary / both：严格只使用 HTML 的采购包/标的物汇总层。
+        summary_source = build_summary_source(content.html_text, content.html_tables)
+        summary_hash = _stable_hash(
+            {
+                "text": summary_source, "detail_status": detail_status,
+                "prompt": (prompts.SUMMARY_SYSTEM_PROMPT, prompts.SUMMARY_USER_PROMPT_TEMPLATE, prompts.OFFICIAL_QA_RULE),
+                "has_tables": bool(content.html_tables),
+                "category_rules": CATEGORY_RULE_VERSION,
+                "spec_rules": SPEC_RULE_VERSION,
+                "numeric_reference_rules": NUMERIC_REFERENCE_RULE_VERSION,
+                "announcement_category_rules": ANNOUNCEMENT_CATEGORY_RULE_VERSION,
+                "supplier_fill_rules": SUPPLIER_FILL_RULE_VERSION,
+                "quantity_unit_rules": QUANTITY_UNIT_RULE_VERSION,
+                "total_award_rules": TOTAL_AWARD_RULE_VERSION,
+                "base_category_role_rules": BASE_CATEGORY_ROLE_RULE_VERSION,
+                "base_function_spec_rules": BASE_FUNCTION_SPEC_RULE_VERSION,
+                "awarded_rate_tier_rules": AWARDED_RATE_TIER_RULE_VERSION,
+                "annual_amount_rules": ANNUAL_AMOUNT_RULE_VERSION,
+                "item_total_rules": ITEM_TOTAL_RULE_VERSION,
+                "cross_package_duplicate_rules": CROSS_PACKAGE_DUPLICATE_RULE_VERSION,
+                "consortium_supplier_rules": CONSORTIUM_SUPPLIER_RULE_VERSION,
+                "official_qa_rules": OFFICIAL_QA_RULE_VERSION,
+            }
+        )
+        if run_mode == "legacy":
+            legacy_source = build_legacy_source(content)
+            legacy_hash = _stable_hash(
+                {
+                    "text": legacy_source,
+                    "detail_status": detail_status,
+                    "has_tables": bool(content.html_tables) or bool(content.attachment_tables),
+                    "prompt": (prompts.SYSTEM_PROMPT, prompts.USER_PROMPT_TEMPLATE, prompts.TABLE_CONTENT_NOTE, prompts.OFFICIAL_QA_RULE),
+                    "category_rules": CATEGORY_RULE_VERSION,
+                    "spec_rules": SPEC_RULE_VERSION,
+                    "numeric_reference_rules": NUMERIC_REFERENCE_RULE_VERSION,
+                    "announcement_category_rules": ANNOUNCEMENT_CATEGORY_RULE_VERSION,
+                    "supplier_fill_rules": SUPPLIER_FILL_RULE_VERSION,
+                    "quantity_unit_rules": QUANTITY_UNIT_RULE_VERSION,
+                    "total_award_rules": TOTAL_AWARD_RULE_VERSION,
+                    "base_category_role_rules": BASE_CATEGORY_ROLE_RULE_VERSION,
+                    "base_function_spec_rules": BASE_FUNCTION_SPEC_RULE_VERSION,
+                    "annual_amount_rules": ANNUAL_AMOUNT_RULE_VERSION,
+                    "item_total_rules": ITEM_TOTAL_RULE_VERSION,
+                    "official_qa_rules": OFFICIAL_QA_RULE_VERSION,
+                }
+            )
+            legacy_is_current = bool(
+                resume
+                and original_previous
+                and original_previous.success
+                and original_previous.summary_input_hash == legacy_hash
+                and original_previous.entities
+            )
+            if legacy_is_current:
+                result.entities = original_previous.entities
+                result.success = True
+                result.error_message = original_previous.error_message
+            else:
+                legacy = self._extract_legacy(
+                    text=legacy_source,
+                    has_tables=bool(content.html_tables) or bool(content.attachment_tables),
+                    announcement_id=announcement_id,
+                    detail_status=detail_status,
+                )
+                if legacy.success:
+                    result.entities = legacy.entities
+                    result.extra_info.pop("_v12_original_base_names", None)
+                    if "_v12_original_base_names" in legacy.extra_info:
+                        result.extra_info["_v12_original_base_names"] = legacy.extra_info["_v12_original_base_names"]
+                    result.success = True
+                    result.error_message = ""
+                elif original_previous and original_previous.entities:
+                    result.entities = original_previous.entities
+                    result.success = True
+                    result.error_message = f"legacy rerun failed: {legacy.error_message}"
+                    # The retained rows were not produced with the new prompt.
+                    # Keep their old fingerprint so a later resume retries.
+                    legacy_hash = original_previous.summary_input_hash
+                else:
+                    result.entities = []
+                    result.success = False
+                    result.error_message = legacy.error_message
+            result.summary_input_hash = legacy_hash
+        elif run_mode in {"summary", "both"}:
+            summary_is_current = bool(
+                resume
+                and previous_is_verified_v2
+                and original_previous.summary_input_hash == summary_hash
+                and original_previous.entities
+            )
+            if summary_is_current:
+                result.entities = original_previous.entities
+                result.success = True
+                result.error_message = original_previous.error_message
+            else:
+                summary = self.extractor.extract_summary(
+                    summary_source,
+                    has_tables=bool(content.html_tables),
+                    detail_status=detail_status,
+                    announcement_id=announcement_id,
+                )
+                if summary.success:
+                    result.entities = summary.entities
+                    result.extra_info.pop("_v12_original_base_names", None)
+                    if "_v12_original_base_names" in summary.extra_info:
+                        result.extra_info["_v12_original_base_names"] = summary.extra_info["_v12_original_base_names"]
+                    result.success = True
+                    result.error_message = ""
+                elif previous_is_verified_v2 and original_previous.entities:
+                    result.entities = original_previous.entities
+                    result.success = True
+                    result.error_message = (
+                        f"summary rerun failed: {summary.error_message}"
+                    )
+                    summary_hash = original_previous.summary_input_hash
+                else:
+                    result.entities = []
+                    result.success = False
+                    result.error_message = summary.error_message
+            result.summary_input_hash = summary_hash
+
+        # 4. 明细层：只在附件可读时调用，失败不改变基础层 success。
+        detail_hash = _stable_hash(
+            {
+                "texts": content.attachment_texts,
+                "tables": content.attachment_tables,
+                "status": detail_status,
+                "prompt": (prompts.DETAIL_SYSTEM_PROMPT, prompts.DETAIL_USER_PROMPT_TEMPLATE, prompts.OFFICIAL_QA_RULE),
+                "category_rules": CATEGORY_RULE_VERSION,
+                "spec_rules": SPEC_RULE_VERSION,
+                "numeric_reference_rules": NUMERIC_REFERENCE_RULE_VERSION,
+                "official_qa_rules": OFFICIAL_QA_RULE_VERSION,
+            }
+        )
+        parser_error = parse_outcome.error_message if parse_outcome else ""
+        if run_mode in {"details", "both", "legacy"} and detail_status == "available":
+            details_are_current = bool(
+                resume
+                and original_previous
+                and original_previous.schema_version >= 2
+                and original_previous.detail_status == "available"
+                and original_previous.detail_input_hash == detail_hash
+                and original_previous.detail_entities
+            )
+            if details_are_current:
+                result.detail_entities = original_previous.detail_entities
+                result.detail_status = "available"
+                result.detail_error_message = original_previous.detail_error_message
+            else:
+                details, extracted_status, extraction_error = self.extractor.extract_details(
+                    texts=content.attachment_texts,
+                    tables=content.attachment_tables,
+                    announcement_id=announcement_id,
+                )
+                if extracted_status == "available":
+                    result.detail_entities = details
+                    result.detail_status = "available"
+                else:
+                    if (
+                        original_previous
+                        and original_previous.schema_version >= 2
+                        and original_previous.detail_status == "available"
+                        and original_previous.detail_entities
+                    ):
+                        result.detail_entities = original_previous.detail_entities
+                    else:
+                        result.detail_entities = []
+                    result.detail_status = "extraction_failed"
+                result.detail_error_message = "；".join(
+                    message
+                    for message in (parser_error, extraction_error)
+                    if message
+                )
+            result.detail_input_hash = detail_hash
+        elif run_mode in {"details", "both", "legacy"}:
+            result.detail_entities = []
+            result.detail_status = detail_status
+            result.detail_error_message = parser_error
+            result.detail_input_hash = detail_hash
+
+        # 5. 额外信息沿用既有行为；它不参与任务一两层准确性判定。
         if self.extract_extra and result.success:
             extra = self.extractor.extract_extra_info(content.full_text, announcement_id)
             if extra and "error" not in extra:
-                result.extra_info = extra
+                original_names = result.extra_info.get("_v12_original_base_names")
+                result.extra_info = {**result.extra_info, **extra}
+                if original_names is not None:
+                    result.extra_info["_v12_original_base_names"] = original_names
+
+        return self._finish_single_result(result, content, html_path,
+                                          summary_source=summary_source if run_mode != "legacy" else "")
+
+    def _extract_legacy(self, *, text, has_tables, announcement_id, detail_status):
+        """Pass known attachment status without breaking old custom extractors."""
+        kwargs = {"text": text, "has_tables": has_tables, "announcement_id": announcement_id}
+        try:
+            parameters = inspect.signature(self.extractor.extract).parameters
+        except (TypeError, ValueError):
+            parameters = {}
+        status_parameter = parameters.get("detail_status")
+        if (status_parameter and status_parameter.kind in {
+            inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        }) or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
+            kwargs["detail_status"] = detail_status
+        return self.extractor.extract(**kwargs)
+
+    def _finish_single_result(
+        self,
+        result: ExtractionResult,
+        content: AnnouncementContent,
+        html_path: Path,
+        *,
+        summary_source: str | None = None,
+    ) -> ExtractionResult:
+        """执行单篇公告的公共数据库收尾。"""
+
+        # Notes live in raw extra_info; do not pretend the existing DAO serves
+        # new metadata. The policy is pure, and runs before optional persistence.
+        result = apply_official_qa(result, content, attachment_sources=content.attachment_texts)
 
         # 5. 写入数据库
         if self.repository:
             try:
                 with self._db_lock:
-                    self.repository.save_extraction_result(
-                        result=result,
-                        title=content.title,
-                        raw_text=content.full_text,
-                        file_path=str(html_path),
-                    )
+                    kwargs = dict(result=result, title=content.title,
+                                  raw_text=content.full_text, file_path=str(html_path))
+                    # Preserve compatibility with legacy custom repositories.
+                    try:
+                        parameters = inspect.signature(self.repository.save_extraction_result).parameters
+                    except (TypeError, ValueError):
+                        parameters = {}  # Uninspectable legacy callable: retain its old kwargs.
+                    if "summary_source" in parameters or any(
+                        p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()
+                    ):
+                        kwargs["summary_source"] = (build_summary_source(content.html_text, content.html_tables)
+                                                    if not summary_source else summary_source)
+                    self.repository.save_extraction_result(**kwargs)
             except Exception as e:
                 print(f"\n  [数据库警告] 写入 {announcement_id} 失败: {e}")
 
@@ -234,6 +589,10 @@ class EntityExtractionPipeline:
         output_format: str = None,
         ground_truth_path: str = None,
         resume: bool = False,
+        run_mode: RunMode = "both",
+        previous_results_path: str | None = None,
+        raw_output_filename: str = "raw_results.json",
+        include_ids: set[str] | None = None,
     ):
         """
         运行完整流水线
@@ -247,44 +606,69 @@ class EntityExtractionPipeline:
         """
         path = Path(input_path)
 
-        # 断点续跑：加载已有成功结果并跳过
+        # 历史结果既可用于旧结构迁移，也可用于分层断点续跑。
         prev_results = []
-        skip_ids = set()
-        if resume:
-            prev_results, skip_ids = self._load_previous_results()
-            print(f"[续跑] 已加载历史成功结果 {len(prev_results)} 条")
+        if previous_results_path:
+            prev_results, _ = self._load_previous_results(
+                explicit_path=previous_results_path,
+                successful_only=False,
+            )
+            print(f"[历史结果] 已加载 {len(prev_results)} 条")
+        elif resume:
+            prev_results, _ = self._load_previous_results(
+                raw_output_filename=raw_output_filename,
+                run_mode=run_mode,
+                successful_only=False,
+            )
+            print(f"[续跑] 已加载历史结果 {len(prev_results)} 条")
+        previous_by_id = {result.announcement_id: result for result in prev_results}
 
         # 处理输入
         if path.is_dir():
             results = self.process_directory(
                 str(path),
-                skip_ids=skip_ids,
                 checkpoint_results=prev_results,
+                run_mode=run_mode,
+                previous_results=prev_results,
+                include_ids=include_ids,
+                resume=resume,
+                raw_output_filename=raw_output_filename,
             )
         elif path.suffix.lower() in (".html", ".htm"):
-            if path.stem in skip_ids:
-                print(f"[续跑] {path.name} 已成功处理过，跳过")
+            if include_ids is not None and path.stem not in include_ids:
+                print(f"[筛选] {path.name} 不在公告 ID 清单中，跳过")
                 results = []
             else:
                 print(f"\n[信息] 处理单个文件: {path.name}")
-                results = [self.process_single_file(str(path))]
+                results = [
+                    self.process_single_file(
+                        str(path),
+                        run_mode=run_mode,
+                        previous_result=previous_by_id.get(path.stem),
+                        resume=resume,
+                    )
+                ]
         else:
             raise ValueError(f"不支持的输入: {input_path}，请提供目录或 HTML 文件")
 
         # 合并历史成功结果 + 本次结果
-        all_results = prev_results + results
+        all_results = _merge_results(prev_results, results)
 
         # 输出结果
         if all_results:
             self.writer.write(all_results, filename=output_filename, fmt=output_format)
-            self.writer.write_raw_results(all_results)
-            self._clear_checkpoint()
+            self.writer.write_raw_results(all_results, filename=raw_output_filename)
+            self._clear_checkpoint(
+                raw_output_filename=raw_output_filename,
+                run_mode=run_mode,
+            )
 
             # 统计
             success_count = sum(1 for r in all_results if r.success)
             total_entities = sum(len(r.entities) for r in all_results)
+            total_details = sum(len(r.detail_entities) for r in all_results)
             print(f"\n[统计] 成功: {success_count}/{len(all_results)}，"
-                  f"共提取 {total_entities} 个标的物")
+                  f"基础结果 {total_entities} 条，附件明细 {total_details} 条")
 
             # 数据库统计
             if self.repository:
@@ -308,20 +692,42 @@ class EntityExtractionPipeline:
 
         return all_results
 
-    def _load_previous_results(self) -> tuple:
+    def _resolve_raw_path(self, raw_output_filename: str) -> Path:
+        """解析原始结果路径，带目录的名字不会被再拼一次输出目录。"""
+        writer = getattr(self, "writer", None)
+        if writer is None:
+            output_dir = Path(config.OUTPUT_DIR)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            writer = ResultWriter(output_dir)
+            self.writer = writer
+        return writer._resolve_output_path(raw_output_filename)
+
+    def _load_previous_results(
+        self,
+        explicit_path: str | None = None,
+        *,
+        raw_output_filename: str = "raw_results.json",
+        run_mode: RunMode = "both",
+        successful_only: bool = True,
+    ) -> tuple:
         """
         加载上次运行的成功结果（用于断点续跑）
 
         Returns:
             (成功结果列表, 已成功的公告ID集合)
         """
-        import json
-        from models.schemas import ExtractedEntity, deduplicate_entities
-
         writer = getattr(self, "writer", None)
         output_dir = Path(getattr(writer, "output_dir", config.OUTPUT_DIR))
-        checkpoint_path = output_dir / "raw_results.checkpoint.json"
-        raw_path = checkpoint_path if checkpoint_path.exists() else output_dir / "raw_results.json"
+        checkpoint_path = self._checkpoint_path(raw_output_filename, run_mode)
+        raw_path = (
+            Path(explicit_path)
+            if explicit_path
+            else (
+                checkpoint_path
+                if checkpoint_path.exists()
+                else self._resolve_raw_path(raw_output_filename)
+            )
+        )
         if not raw_path.exists():
             print(f"[续跑警告] 未找到历史结果文件 {raw_path}，将全量处理")
             return [], set()
@@ -335,35 +741,52 @@ class EntityExtractionPipeline:
         prev_results = []
         skip_ids = set()
         for item in data:
-            if not item.get("success"):
+            if successful_only and not item.get("success"):
                 continue
-            entities = deduplicate_entities(
-                [ExtractedEntity(**e) for e in item.get("entities", [])]
-            )
-            prev_results.append(ExtractionResult(
-                announcement_id=item["announcement_id"],
-                entities=entities,
-                extra_info=item.get("extra_info") or {},
-                success=True,
-            ))
-            skip_ids.add(item["announcement_id"])
+            result = parse_extraction_result(item)
+            prev_results.append(result)
+            skip_ids.add(result.announcement_id)
 
         return prev_results, skip_ids
 
-    def _write_checkpoint(self, results: List[ExtractionResult]):
+    def _checkpoint_path(
+        self,
+        raw_output_filename: str = "raw_results.json",
+        run_mode: RunMode = "both",
+    ) -> Path:
+        """返回与输出文件及运行层隔离的检查点路径。"""
+        writer = getattr(self, "writer", None)
+        output_dir = Path(getattr(writer, "output_dir", config.OUTPUT_DIR))
+        raw_name = Path(raw_output_filename).name
+        if raw_name == "raw_results.json" and run_mode == "both":
+            checkpoint_name = "raw_results.checkpoint.json"
+        else:
+            checkpoint_name = f"{Path(raw_name).stem}.{run_mode}.checkpoint.json"
+        return output_dir / checkpoint_name
+
+    def _write_checkpoint(
+        self,
+        results: List[ExtractionResult],
+        *,
+        raw_output_filename: str = "raw_results.json",
+        run_mode: RunMode = "both",
+    ):
         """原子写入中断检查点，避免进程退出时破坏已有进度。"""
         writer = getattr(self, "writer", None)
         output_dir = Path(getattr(writer, "output_dir", config.OUTPUT_DIR))
         output_dir.mkdir(parents=True, exist_ok=True)
-        temp_name = "raw_results.checkpoint.tmp.json"
-        temp_path = output_dir / temp_name
-        checkpoint_path = output_dir / "raw_results.checkpoint.json"
-        (writer or ResultWriter(output_dir)).write_raw_results(results, filename=temp_name)
-        os.replace(temp_path, checkpoint_path)
+        checkpoint_path = self._checkpoint_path(raw_output_filename, run_mode)
+        (writer or ResultWriter(output_dir)).write_raw_results(
+            results,
+            filename=checkpoint_path.name,
+        )
 
-    def _clear_checkpoint(self):
+    def _clear_checkpoint(
+        self,
+        *,
+        raw_output_filename: str = "raw_results.json",
+        run_mode: RunMode = "both",
+    ):
         """正式结果写入成功后清理临时检查点。"""
-        writer = getattr(self, "writer", None)
-        output_dir = Path(getattr(writer, "output_dir", config.OUTPUT_DIR))
-        checkpoint_path = output_dir / "raw_results.checkpoint.json"
+        checkpoint_path = self._checkpoint_path(raw_output_filename, run_mode)
         checkpoint_path.unlink(missing_ok=True)

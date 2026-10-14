@@ -50,6 +50,7 @@ def health(repo: DataRepository = Depends(get_repository)) -> Dict[str, Any]:
         "database": "connected",
         "announcements": repo.announcements.count_all(),
         "entities": repo.entities.count_all(),
+        "detail_entities": repo.details.count_all(),
     }
 
 
@@ -73,6 +74,23 @@ def list_entities(
     return {"total": total, "page": page, "page_size": page_size, "items": items}
 
 
+@router.get("/detail-entities", summary="附件行级明细检索（分页）")
+def detail_entities(
+    keyword: str = Query("", description="关键词，匹配产品名称/品牌/规格型号/品目"),
+    page: int = Query(1, ge=1, description="页码，从 1 开始"),
+    page_size: int = Query(20, ge=1, le=200, description="每页条数"),
+    repo: DataRepository = Depends(get_repository),
+) -> Dict[str, Any]:
+    """独立检索附件明细，不改变基础 `/entities` 的比赛口径。"""
+    total = repo.details.count_search(keyword)
+    items = repo.details.search(
+        keyword,
+        limit=page_size,
+        offset=(page - 1) * page_size,
+    )
+    return {"total": total, "page": page, "page_size": page_size, "items": items}
+
+
 @router.get("/entities/{announcement_id}", summary="查看某篇公告的全部标的物")
 def entities_by_announcement(
     announcement_id: str,
@@ -84,6 +102,28 @@ def entities_by_announcement(
         raise HTTPException(status_code=404, detail=f"未找到公告 {announcement_id} 的标的物")
 
     return {"announcement_id": announcement_id, "total": len(items), "items": items}
+
+
+@router.get("/entities/{announcement_id}/details", summary="查看某篇公告的附件明细")
+def entity_details_by_announcement(
+    announcement_id: str,
+    repo: DataRepository = Depends(get_repository),
+) -> Dict[str, Any]:
+    """返回附件状态和行级明细；缺失附件是正常空结果，不是 404。"""
+    announcement = repo.announcements.get(announcement_id)
+    if not announcement:
+        raise HTTPException(status_code=404, detail=f"未找到公告 {announcement_id}")
+    detail_status = announcement.get("detail_status")
+    if detail_status is None:
+        raise HTTPException(status_code=409, detail="该公告尚未迁移附件明细状态")
+    items = repo.details.list_by_announcement(announcement_id)
+    return {
+        "announcement_id": announcement_id,
+        "detail_status": detail_status,
+        "detail_error_message": announcement.get("detail_error_message") or "",
+        "total": len(items),
+        "items": items,
+    }
 
 
 @router.get("/announcements/{announcement_id}", summary="查看公告原文")
@@ -170,6 +210,7 @@ def stats(repo: DataRepository = Depends(get_repository)) -> Dict[str, Any]:
     return {
         "announcements": repo.announcements.count_all(),
         "entities": total,
+        "detail_entities": repo.details.count_all(),
         "field_fill": {
             config.FIELD_LABELS.get(name, name): {
                 "count": count,

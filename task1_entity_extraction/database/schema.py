@@ -25,6 +25,8 @@ CREATE TABLE IF NOT EXISTS announcements (
     raw_text        LONGTEXT COMMENT '公告全文文本（含附件）',
     status          VARCHAR(20) DEFAULT 'pending' COMMENT '处理状态：pending/processing/done/failed',
     error_message   TEXT COMMENT '错误信息',
+    detail_status   VARCHAR(32) NULL COMMENT '附件明细状态',
+    detail_error_message TEXT COMMENT '附件明细解析或提取错误',
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_status (status),
@@ -50,6 +52,29 @@ CREATE TABLE IF NOT EXISTS extracted_entities (
     INDEX idx_brand (brand),
     INDEX idx_category (category)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='标的物提取结果表（任务一）';
+"""
+
+# 3. 附件行级明细表（高级展示，不参与基础准确性评测）
+CREATE_TABLE_ENTITY_DETAILS = """
+CREATE TABLE IF NOT EXISTS extracted_entity_details (
+    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+    announcement_id VARCHAR(255) NOT NULL COMMENT '关联公告ID',
+    package_name    VARCHAR(512)  DEFAULT '' COMMENT '所属采购包',
+    product_name    VARCHAR(1024) DEFAULT '' COMMENT '产品服务名称',
+    category        VARCHAR(255)  DEFAULT '' COMMENT '品目',
+    brand           VARCHAR(255)  DEFAULT '' COMMENT '品牌（产品供应商）',
+    spec_model      VARCHAR(8192) DEFAULT '' COMMENT '规格型号',
+    unit_price      VARCHAR(100)  DEFAULT '' COMMENT '单价',
+    quantity        VARCHAR(100)  DEFAULT '' COMMENT '数量',
+    total_price     VARCHAR(100)  DEFAULT '' COMMENT '总价',
+    source_file     VARCHAR(1024) DEFAULT '' COMMENT '来源附件文件名',
+    source_page     VARCHAR(100)  DEFAULT '' COMMENT '来源页码',
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_detail_announcement (announcement_id),
+    INDEX idx_detail_product (product_name(512)),
+    INDEX idx_detail_brand (brand),
+    INDEX idx_detail_category (category)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='附件行级标的物明细';
 """
 
 # 3. 项目关系表（任务二：支撑关系建模）
@@ -86,6 +111,7 @@ CREATE TABLE IF NOT EXISTS bidders (
 ALL_TABLES = [
     CREATE_TABLE_ANNOUNCEMENTS,
     CREATE_TABLE_ENTITIES,
+    CREATE_TABLE_ENTITY_DETAILS,
     CREATE_TABLE_PROJECTS,
     CREATE_TABLE_BIDDERS,
 ]

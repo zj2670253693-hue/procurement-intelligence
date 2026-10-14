@@ -3,3 +3,6 @@ deploy/*.service text eol=lf
 deploy/*.conf text eol=lf
 deploy/*.cnf text eol=lf
 deploy/*.example text eol=lf
+task2_relationship_analysis/*.py text eol=lf
+task2_query_service/*.py text eol=lf
+deploy/task1-task2/*.py text eol=lf

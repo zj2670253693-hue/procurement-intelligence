@@ -1,5 +1,7 @@
 <template>
   <div v-loading="loading">
+    <el-button type="primary" @click="downloadStandardResult">下载任务一标准三表（总表／标的表／投标人表）</el-button>
+    <p class="page-hint">以下计数为保留的原始基础层。比赛标准三表会单独进行采购包汇总、分类及金额单位规范化；附件候选明细不作为实际中标或准确率指标。</p>
     <el-alert
       v-if="error"
       :title="error"
@@ -75,6 +77,12 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
+import { ElMessage } from 'element-plus'
+import { downloadStandard } from '../api/task2'
+
+async function downloadStandardResult() {
+  try { await downloadStandard() } catch (error) { ElMessage.error(error.message) }
+}
 
 import { getStats } from '../api/task1'
 

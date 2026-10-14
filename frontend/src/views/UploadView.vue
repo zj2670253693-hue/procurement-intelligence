@@ -149,7 +149,7 @@ import { Delete, Refresh, Search, Upload, UploadFilled } from '@element-plus/ico
 import { getTask, listTasks, uploadDataset } from '../api/task3'
 
 const fileList = ref([])
-const runExtraction = ref(true)
+const runExtraction = ref(false)
 const uploading = ref(false)
 const task = ref(null)
 const tasks = ref([])

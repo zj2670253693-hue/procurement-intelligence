@@ -6,15 +6,46 @@ import io
 import re
 import threading
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Tuple
 
 from models.schemas import AnnouncementContent
+from models.schemas import DetailStatus
 
 
 _OCR_ENGINE = None
 _OCR_INIT_LOCK = threading.Lock()
 _OCR_RUN_LOCK = threading.Lock()
+
+
+@dataclass(frozen=True)
+class AttachmentParseOutcome:
+    """一次附件包解析的内容、覆盖范围和失败证据。"""
+
+    texts: Dict[str, str]
+    tables: Dict[str, List]
+    archive_files: List[str]
+    parsed_files: List[str]
+    failed_files: List[str]
+    status: DetailStatus
+    error_message: str = ""
+
+
+def classify_attachment_status(
+    html_text: str,
+    zip_exists: bool,
+    outcome: AttachmentParseOutcome | None,
+) -> DetailStatus:
+    """结合正文引用与附件包结果，区分无附件、缺失和不可读。"""
+    if zip_exists:
+        return outcome.status if outcome is not None else "unreadable"
+
+    text = str(html_text or "")
+    references_attachment = bool(
+        re.search(r"详见附件|见附件|附件中|附件内|附件清单|附件下载", text)
+    )
+    return "missing" if references_attachment else "no_attachment"
 
 
 def _get_ocr_engine():
@@ -128,18 +159,40 @@ class AttachmentParser:
         解析 zip 附件包
         返回: (附件文本字典, 附件表格字典)
         """
+        outcome = self.parse_zip_with_status(zip_path, announcement_id)
+        return outcome.texts, outcome.tables
+
+    def parse_zip_with_status(
+        self,
+        zip_path: str,
+        announcement_id: str = "",
+    ) -> AttachmentParseOutcome:
+        """解析 ZIP，并保留文件级成功与失败状态。"""
         texts = {}
         tables = {}
+        archive_files = []
+        parsed_files = []
+        failed_files = []
 
         path = Path(zip_path)
         if not path.exists():
-            return texts, tables
+            return AttachmentParseOutcome(
+                texts=texts,
+                tables=tables,
+                archive_files=archive_files,
+                parsed_files=parsed_files,
+                failed_files=failed_files,
+                status="missing",
+                error_message="附件 ZIP 不存在",
+            )
 
         try:
             with zipfile.ZipFile(zip_path, "r") as zf:
                 for file_info in zf.infolist():
                     if file_info.is_dir():
                         continue
+
+                    archive_files.append(file_info.filename)
 
                     ext = Path(file_info.filename).suffix.lower()
                     if ext not in self.SUPPORTED_EXTENSIONS:
@@ -152,13 +205,39 @@ class AttachmentParser:
                             texts[file_info.filename] = text
                         if table:
                             tables[file_info.filename] = table
+                        if text or table:
+                            parsed_files.append(file_info.filename)
+                        else:
+                            failed_files.append(file_info.filename)
                     except Exception:
-                        # 静默跳过无法解析的附件（加密/格式不符等），HTML 中通常已有主要信息
-                        continue
+                        failed_files.append(file_info.filename)
         except zipfile.BadZipFile:
-            pass
+            return AttachmentParseOutcome(
+                texts=texts,
+                tables=tables,
+                archive_files=archive_files,
+                parsed_files=parsed_files,
+                failed_files=failed_files,
+                status="unreadable",
+                error_message="ZIP 文件损坏或格式不正确",
+            )
 
-        return texts, tables
+        status: DetailStatus = "available" if parsed_files else "unreadable"
+        if failed_files:
+            error_message = "以下附件无法解析: " + "、".join(failed_files)
+        elif not parsed_files:
+            error_message = "附件包中没有可解析的受支持文件"
+        else:
+            error_message = ""
+        return AttachmentParseOutcome(
+            texts=texts,
+            tables=tables,
+            archive_files=archive_files,
+            parsed_files=parsed_files,
+            failed_files=failed_files,
+            status=status,
+            error_message=error_message,
+        )
 
     def parse_files(self, file_paths: List[str]) -> Tuple[Dict[str, str], Dict[str, List]]:
         """直接解析多个文件（非 zip）"""

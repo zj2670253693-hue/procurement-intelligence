@@ -12,6 +12,7 @@ from pathlib import Path
 
 # 保证能找到任务一包内的模块（config / database / models 等）
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -41,6 +42,9 @@ app.add_middleware(
 
 app.include_router(task1.router)
 app.include_router(task3.router)
+
+from task2_query_service.integration import install as install_task2
+install_task2(app, Path(__file__).resolve().parent.parent)
 
 
 @app.get("/", include_in_schema=False)
