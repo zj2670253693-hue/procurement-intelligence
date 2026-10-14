@@ -9,10 +9,17 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def no_external_network(monkeypatch):
-    def deny(*args, **kwargs):
+    original_create, original_connect = socket.create_connection, socket.socket.connect
+    def local_create(address, *args, **kwargs):
+        if isinstance(address, tuple) and address[0] in ("127.0.0.1", "::1"):
+            return original_create(address, *args, **kwargs)
         raise AssertionError("Task3 synthetic test attempted external network")
-    monkeypatch.setattr(socket, "create_connection", deny)
-    monkeypatch.setattr(socket.socket, "connect", deny)
+    def local_connect(sock, address):
+        if isinstance(address, tuple) and address[0] in ("127.0.0.1", "::1"):
+            return original_connect(sock, address)
+        raise AssertionError("Task3 synthetic test attempted external network")
+    monkeypatch.setattr(socket, "create_connection", local_create)
+    monkeypatch.setattr(socket.socket, "connect", local_connect)
 
 
 @pytest.fixture

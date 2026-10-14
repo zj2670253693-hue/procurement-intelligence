@@ -15,14 +15,14 @@ from .offline import OfflineBoundary
 PINNED_LEGACY='ba22af4644b4d2d06592536dce0b28a63228599cd0343ffa438aff308057b4ef'
 PINNED_V11='1878f9237fe3519dd3d1ce38c0835ca7e85dabc28d433be10e30725e66761c8e'
 
-def build_dataset(html_root,legacy_path,v11_path,output_root,expected_count=None):
+def build_dataset(html_root,legacy_path,v11_path,output_root,expected_count=None,*,input_profile=None):
     with OfflineBoundary():
         package=Path(__file__).parent
         impl=implementation_fingerprint(package)
-        snapshot=snapshot_inputs(html_root,legacy_path,v11_path,impl)
+        snapshot=snapshot_inputs(html_root,legacy_path,v11_path,impl,input_profile=input_profile)
         output_path(output_root,snapshot)
         if expected_count is not None and len(snapshot.html_entries)!=expected_count: raise InputContractError('announcement count does not match')
-        if expected_count==1038 and (snapshot.input_manifest['legacy']['sha256']!=PINNED_LEGACY or snapshot.input_manifest['v11']['sha256']!=PINNED_V11): raise InputContractError('1038 acceptance input hashes do not match')
+        if input_profile is None and expected_count==1038 and (snapshot.input_manifest['legacy']['sha256']!=PINNED_LEGACY or snapshot.input_manifest['v11']['sha256']!=PINNED_V11): raise InputContractError('1038 acceptance input hashes do not match')
         cs,issues=load_candidates(snapshot)
         by_aid=defaultdict(list)
         for c in cs: by_aid[c.announcement_id].append(c)

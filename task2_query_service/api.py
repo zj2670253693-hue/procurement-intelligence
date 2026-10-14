@@ -18,8 +18,8 @@ class QueryRequest(BaseModel):
     secondary_page_size: int = Field(default=30,ge=1,le=200)
 
 
-def create_router(repository_provider):
-    router=APIRouter(prefix='/api/task2',tags=['任务二关系分析'])
+def create_router(repository_provider,*,prefix='/api/task2'):
+    router=APIRouter(prefix=prefix,tags=['任务二关系分析'])
     def run(action):
         try: return action()
         except KeyError as exc: raise HTTPException(404,'指定数据版本或原文证据不存在') from exc
@@ -31,6 +31,29 @@ def create_router(repository_provider):
     @router.get('/status')
     def status(dataset_id: str | None=None,repo=Depends(repository_provider)):
         return run(lambda: repo.status(repo.resolve_version(dataset_id)))
+
+    @router.get('/summary')
+    def summary(dataset_id: str | None=None,repo=Depends(repository_provider)):
+        def execute():
+            version=repo.resolve_version(dataset_id)
+            manifest,coverage=repo.metadata(version)
+            small={k:v for k,v in coverage.items() if k.endswith('_counts') or k in ('announcement_status_count','known_amount_count','metric_note','new_model_calls')}
+            return dict(dataset_id=version,status='completed',source_count=len(manifest['sources']),counts=manifest['counts'],coverage=small,new_model_calls=0)
+        return run(execute)
+
+    @router.get('/coverage')
+    def coverage(kind: Literal['announcement_status','candidate_status','scope_status']='announcement_status',
+                 dataset_id: str | None=None,page: int=Query(default=1,ge=1,le=10000),
+                 page_size: int=Query(default=30,ge=1,le=200),repo=Depends(repository_provider)):
+        def execute():
+            start=(page-1)*page_size
+            if start>=10000: raise ValueError('page offset exceeds 10000 result cap')
+            version=repo.resolve_version(dataset_id)
+            _,full=repo.metadata(version)
+            values=full.get(kind,{})
+            entries=sorted(values.items()) if isinstance(values,dict) else [(str(i),v) for i,v in enumerate(values)]
+            return dict(dataset_id=version,kind=kind,total=len(entries),page=page,page_size=page_size,items=[dict(id=k,value=v) for k,v in entries[start:min(start+page_size,10000)]])
+        return run(execute)
 
     @router.get('/organizations')
     def organizations(role: Literal['buyer','winner'],term: str=Query(default='',max_length=120),

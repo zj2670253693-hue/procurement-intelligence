@@ -58,39 +58,52 @@ def _rows(path):
     seen = set()
     for row in rows:
         aid = row.get("announcement_id") if isinstance(row, dict) else None
-        if not isinstance(aid, str) or not ID_PATTERN.fullmatch(aid) or aid in seen:
+        if not isinstance(aid, str) or len(aid)>128 or not ID_PATTERN.fullmatch(aid) or aid in seen:
             raise InputContractError("invalid or duplicate announcement ID")
         seen.add(aid)
     return rows, {"sha256": sha256(raw), "bytes": len(raw)}
 
 def _catalog(root):
-    result = {}
+    result, paths = {}, {}
     for path in sorted(root.iterdir()):
-        if path.suffix.lower() != ".html":
+        if path.suffix.lower() not in (".html", ".htm"):
             continue
-        if not path.is_file() or safe_path(path).parent != root or not ID_PATTERN.fullmatch(path.stem):
+        if not path.is_file() or safe_path(path).parent != root or len(path.stem)>128 or not ID_PATTERN.fullmatch(path.stem) or path.stem in result:
             raise InputContractError("unsafe HTML input path")
         raw = path.read_bytes()
         result[path.stem] = {"sha256": sha256(raw), "bytes": len(raw)}
-    return result
+        paths[path.stem] = path
+    return result, paths
 
-def snapshot_inputs(html_root: Path, legacy_path: Path, v11_path: Path, implementation: dict) -> InputSnapshot:
+def validate_input_profile(profile):
+    if profile is None: return None
+    if (not isinstance(profile,dict) or set(profile)!={'kind','producer','extraction_receipt_sha256'} or
+        profile['kind']!='uploaded' or not isinstance(profile['producer'],str) or
+        not re.fullmatch(r'[A-Za-z][A-Za-z0-9_.:-]{0,127}',profile['producer']) or
+        not isinstance(profile['extraction_receipt_sha256'],str) or
+        not re.fullmatch(r'[0-9a-f]{64}',profile['extraction_receipt_sha256'])):
+        raise InputContractError('invalid uploaded input profile')
+    return dict(profile)
+
+def snapshot_inputs(html_root: Path, legacy_path: Path, v11_path: Path, implementation: dict, *, input_profile=None) -> InputSnapshot:
     paths = [Path(html_root), Path(legacy_path), Path(v11_path)]
     if any(p.is_symlink() for p in paths):
         raise InputContractError("linked input root/file forbidden")
     root, old, frozen = [safe_path(p) for p in paths]
     rows, old_meta = _rows(old)
     vrows, vmeta = _rows(frozen)
-    catalog = _catalog(root)
+    catalog, catalog_paths = _catalog(root)
     ids = sorted({r["announcement_id"] for r in rows} | {r["announcement_id"] for r in vrows} | set(catalog))
     html = {aid: catalog.get(aid) for aid in ids}
     manifest = {"legacy": old_meta, "v11": vmeta, "html": html}
+    profile=validate_input_profile(input_profile)
+    if profile is not None: manifest['input_profile']=profile
     ds = make_dataset_id(manifest, implementation, SCHEMA_VERSION, RULE_VERSION)
-    return InputSnapshot(manifest, rows, vrows, {aid: root / (aid + ".html") if aid in catalog else None for aid in ids}, ds, old, frozen, root, implementation)
+    return InputSnapshot(manifest, rows, vrows, {aid: catalog_paths.get(aid) for aid in ids}, ds, old, frozen, root, implementation)
 
 def assert_inputs_unchanged(snapshot: InputSnapshot) -> None:
     try:
-        now = snapshot_inputs(snapshot.html_root, snapshot.legacy_path, snapshot.v11_path, snapshot.implementation)
+        now = snapshot_inputs(snapshot.html_root, snapshot.legacy_path, snapshot.v11_path, snapshot.implementation, input_profile=snapshot.input_manifest.get('input_profile'))
     except (OSError, InputContractError) as exc:
         raise InputChangedError("input no longer readable/valid") from exc
     if now.input_manifest != snapshot.input_manifest:
@@ -99,7 +112,9 @@ def assert_inputs_unchanged(snapshot: InputSnapshot) -> None:
 def load_candidates(snapshot: InputSnapshot) -> tuple[list[Candidate], list[Issue]]:
     result, issues = [], []
     ds = snapshot.dataset_id
-    def add(aid, file_hash, pointer, field, value, producer="legacy_model_unknown"):
+    default_producer=snapshot.input_manifest.get('input_profile',{}).get('producer','legacy_model_unknown')
+    def add(aid, file_hash, pointer, field, value, producer=None):
+        producer=producer or default_producer
         c = Candidate(ds, make_record_id(ds, "candidate", (file_hash, pointer)), aid, file_hash, pointer, field, value, producer)
         result.append(c)
         return c
@@ -144,5 +159,5 @@ def load_candidates(snapshot: InputSnapshot) -> tuple[list[Candidate], list[Issu
                 raise InputContractError("V11 entity layer must be array")
             for j, value in enumerate(values):
                 if isinstance(value, dict) and value.get("brand"):
-                    add(aid, snapshot.input_manifest["v11"]["sha256"], f"$[{number}].{layer}[{j}]", "product_reference", value, "v11_readonly_reference")
+                    add(aid, snapshot.input_manifest["v11"]["sha256"], f"$[{number}].{layer}[{j}]", "product_reference", value, default_producer if 'input_profile' in snapshot.input_manifest else "v11_readonly_reference")
     return result, issues

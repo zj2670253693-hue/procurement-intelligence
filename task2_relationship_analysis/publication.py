@@ -33,6 +33,11 @@ def write_artifacts(bundle,report,snapshot,output_root):
     payload['coverage.json']=canonical_bytes(report.coverage)
     manifest={'dataset_id':bundle.dataset_id,'schema_version':SCHEMA_VERSION,'rule_version':RULE_VERSION,'status':'completed','input_manifest':snapshot.input_manifest,'implementation':snapshot.implementation,'output_hashes':{name:sha256(raw) for name,raw in payload.items()},'sources':sorted(bundle.sources,key=lambda s:s.source_id),'counts':{name:len(rows) for name,(rows,key) in records.items()},'new_model_calls':0,'legacy_producer':'legacy_model_unknown','processing_mode':'one_html_at_a_time','runtime_note':'Clocks and input paths are separate local receipts; no DB/Task1/model modules loaded.'}
     payload['manifest.json']=canonical_bytes(manifest)
+    profile=snapshot.input_manifest.get('input_profile')
+    if profile:
+        manifest['legacy_producer']=profile['producer']
+        manifest['input_profile']=profile
+        payload['manifest.json']=canonical_bytes(manifest)
     target=root/bundle.dataset_id
     if target.exists():
         safe_path(target)
@@ -76,7 +81,7 @@ def _read_bundle(path,manifest):
         b.issues.append(Issue(**value))
     return b
 
-def verify_artifacts(dataset_dir):
+def verify_artifacts(dataset_dir,*,input_paths=None):
     with OfflineBoundary():
         path=safe_path(dataset_dir)
         if {p.name for p in path.iterdir()}!=set(FILES)|{'manifest.json'}: raise ArtifactConflictError('published file catalog differs')
@@ -85,8 +90,8 @@ def verify_artifacts(dataset_dir):
         if set(manifest['output_hashes'])!=set(FILES): raise ArtifactConflictError('hash catalog differs')
         for name,digest in manifest['output_hashes'].items():
             if sha256(safe_path(path/name).read_bytes())!=digest: raise ArtifactConflictError('artifact hash mismatch: '+name)
-        receipt=strict_json(safe_path(path.parent.parent/'run_receipts'/(manifest['dataset_id']+'.inputs.json')).read_bytes())
-        snapshot=snapshot_inputs(Path(receipt['html_root']),Path(receipt['legacy_path']),Path(receipt['v11_path']),manifest['implementation'])
+        receipt=strict_json(safe_path(path.parent.parent/'run_receipts'/(manifest['dataset_id']+'.inputs.json')).read_bytes()) if input_paths is None else input_paths
+        snapshot=snapshot_inputs(Path(receipt['html_root']),Path(receipt['legacy_path']),Path(receipt['v11_path']),manifest['implementation'],input_profile=manifest['input_manifest'].get('input_profile'))
         if snapshot.dataset_id!=manifest['dataset_id'] or snapshot.input_manifest!=manifest['input_manifest']: raise ArtifactConflictError('input version no longer matches')
         bundle=_read_bundle(path,manifest)
         report=validate_bundle(bundle,snapshot);require_valid(report)
