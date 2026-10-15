@@ -38,6 +38,8 @@
 
 ## 默认离线验证
 
+准备代码包可用 `deploy/task3/build_preview_bundle.py --frontend-dist <已校验构建目录> --output <不存在的新ZIP>`。只读取 Git 已跟踪且允许的 Python 包/requirements 与已构建前端，包含 Task3、Task2、标准导出工具及平铺后的旧核心；排除私有结果、原始数据、`.env`、未跟踪文件和测试目录。源码未提交变更会拒绝以 HEAD 标记，已有包不会覆盖。每个文件有SHA清单，ZIP本身也有SHA。冻结 `release_assets` 不进这个代码包，后续应在服务器内从当前冻结版本复制并核对。`code_bundle_prepared` 不是已安装/已验收报告；它也不能证明操作者提供的 dist 与源代码语义一致，仍需保留独立的前端构建/浏览器证据。
+
 ```text
 python -B -m pytest -q
 node --test frontend/tests/*.test.js
