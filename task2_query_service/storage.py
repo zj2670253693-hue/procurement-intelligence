@@ -64,10 +64,14 @@ def initialize(connection):
     connection.commit()
 
 
-def import_dataset(connection, directory):
+def import_dataset(connection, directory, *, initialize_schema=True, pulse=None):
+    pulse=pulse or (lambda:None)
+    pulse()
     data=load_dataset(directory)
+    pulse()
     version=data['dataset_id'];manifest=encoded(data['manifest']);msha=digest(manifest)
-    initialize(connection)
+    if initialize_schema:
+        initialize(connection)
     connection.begin()
     try:
         with connection.cursor() as cur:
@@ -77,7 +81,9 @@ def import_dataset(connection, directory):
                 if old['status']!='completed' or old['manifest_sha']!=msha:
                     raise ValueError('existing immutable version differs; no overwrite allowed')
                 MySQLRepository(connection,artifact_root=Path(directory).parent).load(version)
+                pulse()
                 connection.commit()
+                pulse()
                 return dict(dataset_id=version,status='reused',task1_written=False)
             cur.execute('INSERT INTO t2_datasets (dataset_id,status,manifest_sha,manifest_json,coverage_json) VALUES (%s,%s,%s,%s,%s)',
                         (version,'pending',msha,manifest,data['coverage_text']))
@@ -87,16 +93,20 @@ def import_dataset(connection, directory):
                     payload=encoded(f)
                     rows.append((version,f['record_id'],f['kind'],f['validation_status'],f['aggregation_eligibility'],payload,digest(payload)))
                 cur.executemany('INSERT INTO t2_facts (dataset_id,record_id,kind,validation_status,eligibility,payload,payload_sha) VALUES (%s,%s,%s,%s,%s,%s,%s)',rows)
+                pulse()
             for offset in range(0,len(data['evidence']),200):
                 rows=[]
                 for e in data['evidence'][offset:offset+200]:
                     payload=encoded(e);rows.append((version,e['evidence_id'],e['source_id'],payload,digest(payload)))
                 cur.executemany('INSERT INTO t2_evidence (dataset_id,evidence_id,source_id,payload,payload_sha) VALUES (%s,%s,%s,%s,%s)',rows)
+                pulse()
             for table,expected in (('t2_facts',len(data['facts'])),('t2_evidence',len(data['evidence']))):
                 cur.execute('SELECT COUNT(*) AS n FROM '+table+' WHERE dataset_id=%s',(version,))
                 if cur.fetchone()['n']!=expected: raise ValueError('imported count mismatch')
             cur.execute('UPDATE t2_datasets SET status=%s WHERE dataset_id=%s',('completed',version))
+        pulse()
         connection.commit()
+        pulse()
     except BaseException:
         connection.rollback();raise
     return dict(dataset_id=version,status='completed',facts=len(data['facts']),evidence=len(data['evidence']),

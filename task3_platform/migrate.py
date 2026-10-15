@@ -26,3 +26,14 @@ def migrate(connection, expected_database: str) -> dict:
     connection.commit()
     return {"schema_version": SCHEMA_VERSION, "created_tables": sorted(set(TABLES) - existing),
             "reused": set(TABLES).issubset(existing)}
+
+
+def migrate_platform(connection,expected_database):
+    """Administrator-only install of BOTH namespaces, never a runtime fallback."""
+    if (not isinstance(expected_database,str) or
+            not re.fullmatch(r'procurement_task3_accept_[A-Za-z0-9_]{1,40}',expected_database)):
+        raise PlatformError('isolated_platform_migration_required',403)
+    report=migrate(connection,expected_database)
+    from task2_query_service.storage import initialize
+    initialize(connection)
+    return {**report,'relation_schema_installed':True}

@@ -74,6 +74,15 @@ def test_migration_wrong_database_or_schema_never_writes(platform_module, fake_c
     assert not any(sql.startswith(("INSERT", "CREATE")) for sql, _ in fake_connection.statements)
 
 
+def test_admin_platform_migration_installs_relation_dependency_explicitly(platform_module,fake_connection):
+    module=platform_module('migrate')
+    assert hasattr(module,'migrate_platform'),'Full explicit platform migration missing'
+    fake_connection.database='procurement_task3_accept_synthetic'
+    module.migrate_platform(fake_connection,fake_connection.database)
+    ddls=[sql for sql,_ in fake_connection.statements if sql.startswith('CREATE TABLE')]
+    assert any('t2_datasets' in sql for sql in ddls) and any('t2_evidence' in sql for sql in ddls)
+
+
 def test_canonical_business_bytes_keep_decimal_and_reject_floats(platform_module):
     contracts = platform_module("contracts")
     encoded = contracts.canonical_bytes({"money": Decimal("1.23000000"), "unknown": None})

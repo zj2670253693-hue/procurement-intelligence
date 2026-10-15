@@ -294,6 +294,16 @@ def test_entity_adapter_does_not_complete_when_extra_schema_fails(platform_modul
     assert result.diagnostics["extra_valid"] is False
 
 
+def test_intention_only_empty_is_not_a_published_target_gap(platform_module):
+    from models.schemas import AnnouncementContent
+    module=platform_module('entity_step')
+    content=AnnouncementContent(announcement_id='t20990101_1',title='框架协议第一阶段入围公告',
+        html_text='仅征集，尚无实际成交。主要标的信息：打印机',html_tables=[[['货物名称'],['打印机']]])
+    assert module.source_has_targets(content) is False
+    actual=content.model_copy(update={'title':'框架协议第二阶段订单成交公告','html_text':'主要标的信息：打印机已实际成交'})
+    assert module.source_has_targets(actual) is True
+
+
 def test_long_model_wait_pulses_on_sql_owner_thread(ledger_setup, clock):
     import threading, time
     from types import SimpleNamespace

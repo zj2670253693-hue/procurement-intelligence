@@ -84,6 +84,7 @@
       <el-main class="main">
         <div class="main-inner">
           <DatasetSelector />
+          <DatasetCoverageAlert />
           <router-view />
         </div>
       </el-main>
@@ -97,6 +98,7 @@ import { useRoute } from 'vue-router'
 
 import { getHealth } from '../api/task1'
 import DatasetSelector from '../components/DatasetSelector.vue'
+import DatasetCoverageAlert from '../components/DatasetCoverageAlert.vue'
 
 const route = useRoute()
 const health = ref(null)

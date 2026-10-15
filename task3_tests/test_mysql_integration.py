@@ -30,8 +30,8 @@ def real_mysql():
                   database=database, cursorclass=DictCursor, charset="utf8mb4", autocommit=False)
     connections = [pymysql.connect(**config) for _ in range(2)]
     try:
-        from task3_platform.migrate import migrate
-        migrate(connections[0], database)
+        from task3_platform.migrate import migrate_platform
+        migrate_platform(connections[0], database)
         with connections[0].cursor() as cursor:
             cursor.execute("SELECT COUNT(*) AS n FROM t3_jobs WHERE status IN ('queued','running','validating')")
             assert cursor.fetchone()["n"] == 0, "Acceptance database has active work; refusing interference"

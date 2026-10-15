@@ -55,6 +55,9 @@ def router(provider):
                 item=strict_json_loads(row["payload_json"])
                 for name in FIELDS: fills[name]+=str(item.get(name) or "").strip() not in UNKNOWN
         return {"upload_dataset_id":dataset_id,"availability":dataset["availability"],"announcements":totals[0],"entities":totals[1],"detail_entities":totals[2],"field_fill":{name:{"count":count,"rate":round(count/totals[1]*100,1) if totals[1] else 0} for name,count in fills.items()},"note":"填充率不是准确率；未公示值不强填。"}
+    @api.get('/datasets/{dataset_id}/coverage')
+    def dataset_coverage(dataset_id:str,request:Request,services=Depends(provider)):
+        return services.datasets.coverage(services.actor(request),dataset_id)
     def source(services,actor,dataset_id,aid):
         return services.baseline.announcement(actor,dataset_id,aid) if dataset_id=="official" else services.datasets.announcement(actor,dataset_id,aid)
     @api.get("/datasets/{dataset_id}/announcements/{aid}")

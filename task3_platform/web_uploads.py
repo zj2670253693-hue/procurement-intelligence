@@ -47,7 +47,7 @@ def router(provider):
         limits=services.jobs.limits
         return {"chunk_bytes":limits.chunk_bytes,"file_bytes":limits.file_bytes,"received_bytes":limits.received_bytes,
                 "announcements":limits.announcements,"paid_inference_ready":services.uploads.extract_authorizer is not None,
-                "secure_transport":services.secure,"public_demo":services.guest_actor is not None}
+                "secure_transport":services.secure,"public_demo":False}
     @api.post("/uploads")
     async def begin(request: Request, services=Depends(provider)):
         actor = services.actor(request, mutation=True, guest=True)

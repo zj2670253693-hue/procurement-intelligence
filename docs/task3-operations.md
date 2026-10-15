@@ -11,6 +11,7 @@
 - `DB_NAME`、`TASK2_DATASET_ID` 保留现有官方冻结库/事实版本，官方适配器只读。
 - `TASK3_DB_NAME` 必须指向另一个专用库；真实验收库仅接受 `procurement_task3_accept_` 前缀，不复用任务一的数据库授权。
 - 平台 reviewer/admin 是独立账号，不是 Linux 的 admin/zhoujin。密码由 `deploy/task3/provision_user.py` 隐藏交互输入，不发到聊天、日志或 Git。
+- 匿名任务入口已禁用（包括旧共享guest配置），不能用共享owner代替独立会话；当前所有上传、进度、取消及产物访问均需个人平台会话。匿名隔离会话后续单独实现再开放。
 - `TASK3_RUNTIME_ROOT` 为绝对路径，例如 `/srv/procurement-app/shared/runtime/task3-accept`，必须在发布目录外且没有软链接/目录联接。
 - 私有输入、原始结果、请求/用量账本、验收报告、截图、release_assets 和实际环境文件均不得提交 GitHub。
 
@@ -18,7 +19,7 @@
 
 1. 确认旧服务健康、当前 release/env/官方库指纹并备份。当前线上任务一计数基线为 1038/6784/14110；计数只是健康检查，不能代替内容哈希。
 2. 在阿里云 Ubuntu24.04 的 2vCPU/4GB 主机新建专用任务三验收库，授予现有应用账号**仅该库**权限；不要修改旧库或授予全局权限。
-3. 管理员显式调用 `task3_platform.migrate.migrate(connection, expected_database)`，连接 `create_db=False`。API/worker 启动没有 DDL。再用 provision_user 创建三名平台用户。
+3. 管理员显式调用 `task3_platform.migrate.migrate_platform(connection, expected_database)`，连接 `create_db=False`，一次安装13个t3表和4个独立t2依赖表。API/worker 启动和任务关系导入没有 DDL。再用 provision_user 创建三名平台用户。
 4. 配置有效公网 HTTPS 与域名/证书、同源 `TASK3_PUBLIC_ORIGIN`。若由 Nginx 终止 TLS，只信任明确配置的 loopback 代理，设置 `TASK3_TRUSTED_PROXIES`；不能盲信任任意 `X-Forwarded-Proto`。现有 HTTP 展示不作为私有登录/付费操作的安全通道。
 5. 先运行独立预览实例与单 worker；不要切换 `/srv/procurement-app/current`。预览与正式 worker 共用服务器级 named lock，不能同时处理。
 6. 单 worker unit 的 `MemoryMax=1024M` 是**worker 和全部孩子总和**，`MemorySwapMax=0`、`KillMode=control-group`；API drop-in 为 768M。不能仅用 Python 主进程 RSS 冒充总 cgroup 峰值，也不能用 Windows 测试证明 Linux 限额。

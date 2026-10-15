@@ -113,6 +113,18 @@ class DatasetRepository:
                   "announcement_id": row["announcement_id"], "upload_dataset_id": dataset_id} for row in rows]
         return Page(items, total, page, page_size, dataset_id, dataset["availability"])
 
+    def coverage(self,actor,dataset_id):
+        dataset=self.dataset(actor,dataset_id)
+        with self.connection.cursor() as cursor:
+            job=self.jobs._row(cursor,dataset['task_id'])
+            cursor.execute('SELECT COUNT(*) AS n FROM t3_announcements WHERE upload_dataset_id=%s',(dataset_id,))
+            processed=cursor.fetchone()['n']
+        manifest=strict_json_loads(job['manifest_json']) if job['manifest_json'] else {}
+        total=len(manifest.get('inputs',[]))
+        return {'upload_dataset_id':dataset_id,'task_id':dataset['task_id'],'availability':dataset['availability'],
+                'processed_announcements':processed,'total_announcements':total,
+                'failed_announcements':max(0,total-processed),'report_artifact':'errors.json'}
+
     def announcement(self, actor, dataset_id, aid):
         dataset = self.dataset(actor, dataset_id)
         validate_announcement_id(aid)

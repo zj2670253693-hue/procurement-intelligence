@@ -38,7 +38,8 @@ def create_router(repository_provider,*,prefix='/api/task2'):
             version=repo.resolve_version(dataset_id)
             manifest,coverage=repo.metadata(version)
             small={k:v for k,v in coverage.items() if k.endswith('_counts') or k in ('announcement_status_count','known_amount_count','metric_note','new_model_calls')}
-            return dict(dataset_id=version,status='completed',source_count=len(manifest['sources']),counts=manifest['counts'],coverage=small,new_model_calls=0)
+            return dict(dataset_id=version,status='completed',source_count=len(manifest['sources']),counts=manifest['counts'],coverage=small,new_model_calls=0,
+                        upload_coverage=getattr(repo,'upload_coverage',None))
         return run(execute)
 
     @router.get('/coverage')

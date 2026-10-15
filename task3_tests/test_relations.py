@@ -63,9 +63,25 @@ def test_child_boundary_cannot_block_api(platform_module, tmp_path):
         module.run_relation_child(root, raw, root / "overlap", PROFILE)
 
 
+def test_promoted_relation_keeps_verifiable_receipt_and_durable_owner(platform_module,tmp_path):
+    from task2_relationship_analysis.publication import verify_artifacts
+    disk=platform_module('relation_disk')
+    paths=platform_module('paths').RuntimePaths(tmp_path/'runtime')
+    task_id='d'*32;task=paths.task(task_id)
+    task.inputs.mkdir(parents=True);task.extraction.mkdir()
+    (task.inputs/'t20990101_1.html').write_text('<p>项目名称：合成项目</p>',encoding='utf-8')
+    raw=task.extraction/'raw.json';raw.write_text(json.dumps([{'announcement_id':'t20990101_1','success':True,'entities':[],'detail_entities':[],'extra_info':{}}]))
+    profile={**PROFILE,'extraction_receipt_sha256':hashlib.sha256(raw.read_bytes()).hexdigest()}
+    receipt=platform_module('relations').run_relation_child(task.inputs,raw,disk.staging_root(paths,task_id)/'artifacts',profile)
+    target=disk.promote(paths,task_id,receipt)
+    assert receipt['dataset_id'] in disk.owned_versions(paths,task_id)
+    assert verify_artifacts(target)['valid'] is True
+
+
 def test_light_summary_and_coverage_page():
     from task2_query_service.api import create_router
     class Repo:
+        upload_coverage={'availability':'partial','processed_announcements':1,'total_announcements':2}
         def resolve_version(self, version=None): return "synthetic"
         def metadata(self, version):
             return ({"sources": [], "counts": {}, "new_model_calls": 0},
@@ -76,6 +92,7 @@ def test_light_summary_and_coverage_page():
     summary = client.get("/scoped/summary").json()
     assert "announcement_status" not in summary["coverage"]
     assert summary["source_count"] == 0
+    assert summary['status']=='completed' and summary['upload_coverage']['availability']=='partial'
     page = client.get("/scoped/coverage", params={"kind": "announcement_status", "page": 2, "page_size": 200}).json()
     assert page["total"] == 250 and len(page["items"]) == 50
     assert client.get("/scoped/coverage", params={"page_size": 201}).status_code == 422
@@ -98,6 +115,41 @@ def test_binding_checks_owner_before_repository(platform_module, tmp_path, actor
     assert repository.resolve_version() == "ds_" + "b"*64
     with pytest.raises(platform_module("contracts").PlatformError):
         repository.resolve_version("ds_" + "c"*64)
+    connection.db.close()
+
+
+@pytest.mark.parametrize('cancel',[False,True])
+def test_sql_import_uses_separate_connection_and_owner_thread_heartbeat(platform_module,tmp_path,actor_a,clock,monkeypatch,cancel):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from task3_tests.test_runtime import setup
+    connection,jobs,job,paths=setup(platform_module,tmp_path,actor_a,clock,'extract')
+    lease=jobs.claim('import-test');jobs.transition(lease,'validating','relation_import')
+    task=paths.task(job.task_id);task.extraction.mkdir();raw=task.extraction/'raw.json';raw.write_text('[]')
+    version='ds_'+'b'*64
+    module=platform_module('relations')
+    monkeypatch.setattr(module,'run_relation_child',lambda *args,**kwargs:{'dataset_id':version,'manifest_sha256':'a'*64})
+    monkeypatch.setattr(platform_module('relation_disk'),'promote',lambda *args:None)
+    separate=object()
+    @contextmanager
+    def factory(): yield separate
+    def importer(import_connection,directory,*,initialize_schema,pulse):
+        assert import_connection is separate and initialize_schema is False
+        for index in range(4):
+            clock.advance(20)
+            if cancel and index==1: jobs.request_cancel(actor_a,job.task_id)
+            pulse()
+        return {'dataset_id':version}
+    monkeypatch.setattr(module,'import_dataset',importer)
+    service=module.RelationService(connection,paths,jobs=jobs,import_connection_factory=factory)
+    worker=platform_module('worker').ProcessingWorker(jobs,SimpleNamespace(),clock)
+    if cancel:
+        with pytest.raises(platform_module('contracts').PlatformError):
+            service.build_and_bind(lease,task.inputs,raw,{'producer':'task3_uploaded_pipeline_v1'},pulse=lambda:worker._pulse(lease))
+        assert connection.db.execute('SELECT task2_dataset_id FROM t3_datasets').fetchone()[0] is None
+    else:
+        binding=service.build_and_bind(lease,task.inputs,raw,{'producer':'task3_uploaded_pipeline_v1'},pulse=lambda:worker._pulse(lease))
+        assert binding.task2_dataset_id==version
     connection.db.close()
 
 

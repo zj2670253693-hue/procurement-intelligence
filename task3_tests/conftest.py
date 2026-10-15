@@ -84,7 +84,7 @@ class MigrationCursor:
             self.rows = [{"table_name": name} for name in self.connection.tables]
         elif sql.lstrip().startswith("CREATE TABLE"):
             import re
-            self.connection.tables.add(re.search(r"EXISTS\s+(t3_\w+)", sql).group(1))
+            self.connection.tables.add(re.search(r"EXISTS\s+(t[23]_\w+)", sql).group(1))
             self.rows = []
         elif sql.startswith("SELECT schema_version"):
             self.rows = [{"schema_version": self.connection.version}] if self.connection.version else []

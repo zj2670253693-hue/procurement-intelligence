@@ -1,5 +1,6 @@
 """Uploaded relationship versions: offline child, immutable import, owner binding."""
 from dataclasses import dataclass
+from contextlib import contextmanager
 import hashlib
 import os
 from pathlib import Path
@@ -75,8 +76,9 @@ class RelationBinding:
 
 
 class ScopedRepository:
-    def __init__(self, repository, version):
+    def __init__(self, repository, version,upload_coverage=None):
         self.repository, self.version = repository, version
+        self.upload_coverage=upload_coverage
 
     def resolve_version(self, requested=None):
         if requested is not None and requested != self.version:
@@ -93,10 +95,27 @@ class ScopedRepository:
 
 
 class RelationService:
-    def __init__(self, connection, paths, *, jobs=None):
+    def __init__(self, connection, paths, *, jobs=None,import_connection_factory=None):
         self.connection, self.paths = connection, paths
         self.jobs = jobs or JobStore(connection)
         self.datasets = DatasetRepository(connection, jobs=self.jobs, paths=paths)
+        self.import_connection_factory=import_connection_factory or self._import_connection
+
+    @contextmanager
+    def _import_connection(self):
+        # Import transaction and durable lease use different connections on the
+        # SAME owning worker thread, never a concurrently shared DB connection.
+        database=getattr(self.connection,'db',None)
+        if isinstance(database,bytes): database=database.decode('ascii')
+        if not isinstance(database,str) or not re.fullmatch(r'procurement_task3_[A-Za-z0-9_]+',database):
+            raise PlatformError('isolated_import_connection_required',503)
+        from database.connection import DatabaseConfig
+        import pymysql
+        config=DatabaseConfig(database=database).to_dict()
+        config.update(connect_timeout=10,read_timeout=15,write_timeout=15)
+        connection=pymysql.connect(**config)
+        try: yield connection
+        finally: connection.close()
 
     def build_and_bind(self, lease, html_root, raw_path, provenance, *, pulse=lambda: None, max_output_bytes=512 * 1024**2):
         task = self.paths.task(lease.task_id)
@@ -109,11 +128,16 @@ class RelationService:
             if job["mode"] != "extract" or job["status"] != "validating":
                 raise PlatformError("relation_stage_mismatch", 409)
         profile = {"kind": "uploaded", "producer": provenance["producer"], "extraction_receipt_sha256": _hash_file(raw_path)}
+        from .relation_disk import staging_root,promote
+        staging=staging_root(self.paths,lease.task_id)/'artifacts'
         root = self.paths.root / "task2/artifacts"
-        receipt = run_relation_child(html_root, raw_path, root, profile, pulse=pulse, max_output_bytes=max_output_bytes)
+        receipt = run_relation_child(html_root, raw_path, staging, profile, pulse=pulse, max_output_bytes=max_output_bytes)
+        promote(self.paths,lease.task_id,receipt)
         pulse()
         # No activate(): uploaded versions never replace the official default.
-        imported = import_dataset(self.connection, root / receipt["dataset_id"])
+        with self.import_connection_factory() as import_connection:
+            imported = import_dataset(import_connection, root / receipt["dataset_id"],initialize_schema=False,pulse=pulse)
+        pulse()
         if imported["dataset_id"] != receipt["dataset_id"]:
             raise PlatformError("relation_import_mismatch", 409)
         with transaction(self.connection) as cursor:
@@ -133,4 +157,4 @@ class RelationService:
             raise PlatformError("relation_not_ready", 409)
         root = self.paths.root / "task2/artifacts"
         repository = MySQLRepository(self.connection, cache_namespace=str(root), artifact_root=root)
-        return ScopedRepository(repository, version)
+        return ScopedRepository(repository, version,self.datasets.coverage(actor,upload_dataset_id))

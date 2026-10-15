@@ -66,3 +66,25 @@ def test_reused_import_loads_and_checks_all_stored_rows(local_tmp,monkeypatch):
     monkeypatch.setattr(storage.MySQLRepository,'load',refuse)
     with pytest.raises(ValueError,match='stored missing'):storage.import_dataset(conn,directory)
     assert called and conn.events[-1]=='rollback'
+
+
+def test_runtime_import_can_explicitly_forbid_ddl(local_tmp,monkeypatch):
+    from task2_tests.test_artifact_loader import version
+    from task2_query_service import storage
+    directory=version(local_tmp);data=storage.load_dataset(directory)
+    conn=Connection();conn.cur.rows=[{'status':'completed','manifest_sha':storage.digest(storage.encoded(data['manifest']))}]
+    monkeypatch.setattr(storage.MySQLRepository,'load',lambda *args: {})
+    result=storage.import_dataset(conn,directory,initialize_schema=False)
+    assert result['status']=='reused'
+    assert not any(sql.lstrip().startswith(('CREATE','ALTER','DROP')) for sql,_ in conn.cur.calls)
+
+
+def test_import_pulses_at_load_and_transaction_boundaries(local_tmp,monkeypatch):
+    from task2_tests.test_artifact_loader import version
+    from task2_query_service import storage
+    directory=version(local_tmp);data=storage.load_dataset(directory)
+    conn=Connection();conn.cur.rows=[{'status':'completed','manifest_sha':storage.digest(storage.encoded(data['manifest']))}]
+    monkeypatch.setattr(storage.MySQLRepository,'load',lambda *args: {})
+    pulses=[]
+    storage.import_dataset(conn,directory,initialize_schema=False,pulse=lambda:pulses.append(1))
+    assert len(pulses)>=3

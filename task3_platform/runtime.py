@@ -28,14 +28,19 @@ class RuntimeSteps:
         self.artifacts=ArtifactService(jobs,paths)
         self.relations=relations or RelationService(jobs.connection,paths,jobs=jobs)
         self._lease=None
-        self._external_bytes=0
 
     def _actual(self,lease):
         root=self.paths.task(lease.task_id).inputs.parent
-        total=self._external_bytes
-        for path in root.rglob("*"):
-            reject_link_ancestors(path)
-            if path.is_file(): total+=path.stat().st_size
+        from .relation_disk import counted_roots
+        total=0
+        for owned_root in (root,*counted_roots(self.paths,lease.task_id)):
+            reject_link_ancestors(owned_root)
+            if owned_root.is_file():
+                total+=owned_root.stat().st_size
+                continue
+            for path in owned_root.rglob("*"):
+                reject_link_ancestors(path)
+                if path.is_file(): total+=path.stat().st_size
         return total
 
     def _reserve(self,lease,additional,*,settle=False):
@@ -56,8 +61,6 @@ class RuntimeSteps:
     def prepare(self,lease,job):
         if job.processing_fingerprint!=self.processing_fingerprint:
             raise PlatformError("processing_version_changed",409)
-        if self._lease is None or self._lease.task_id!=lease.task_id:
-            self._external_bytes=0
         self._lease=lease
         with self.jobs.connection.cursor() as cursor:
             row=self.jobs._row(cursor,job.task_id)
@@ -124,12 +127,10 @@ class RuntimeSteps:
 
     def finish(self,lease,job,items,diagnostics,pulse):
         raw=self._raw(lease,items,diagnostics)
-        allowance=min(512*1024**2,self.jobs.limits.job_disk_bytes-self._actual(lease))
-        self._reserve(lease,allowance)
+        allowance=min(512*1024**2,self.jobs.limits.job_disk_bytes-self._actual(lease)-64*1024)
+        self._reserve(lease,allowance+64*1024)
         binding=self.relations.build_and_bind(lease,self.paths.task(job.task_id).inputs,raw,
             {"producer":"task3_uploaded_pipeline_v1"},pulse=pulse,max_output_bytes=allowance)
-        directory=self.paths.root/"task2/artifacts"/binding.task2_dataset_id
-        self._external_bytes=sum(path.stat().st_size for path in directory.iterdir() if path.is_file()) if directory.is_dir() else 0
         self._reserve(lease,0,settle=True)
         report=self._exports(lease,job,raw,pulse)
         state="partial" if diagnostics or any(item.get("stage_status")=="partial" for item in items) or report["incomplete"] else "completed"

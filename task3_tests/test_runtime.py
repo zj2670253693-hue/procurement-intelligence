@@ -50,3 +50,24 @@ def test_extraction_composition_imports_counts_and_publishes_only_own_dataset(pl
     assert connection.db.execute("SELECT availability FROM t3_datasets").fetchone()[0]=="completed"
     assert not any("UPDATE extracted_entities" in sql for sql,_ in connection.statements)
     connection.db.close()
+
+
+def test_relation_failed_staging_receipts_and_published_bytes_survive_restart_accounting(platform_module,tmp_path,actor_a,clock):
+    import json
+    connection,jobs,job,paths=setup(platform_module,tmp_path,actor_a,clock,'extract')
+    lease=jobs.claim('quota-test')
+    steps=platform_module('runtime').RuntimeSteps(jobs,paths,processing_fingerprint=job.processing_fingerprint)
+    before=steps._actual(lease)
+    staged=paths.root/'task2/staging'/job.task_id/'artifacts/.pending-synthetic'
+    staged.mkdir(parents=True);(staged/'partial').write_bytes(b'x'*100)
+    receipt=staged.parent.parent/'run_receipts';receipt.mkdir();(receipt/'synthetic.inputs.json').write_bytes(b'y'*50)
+    version='ds_'+'a'*64
+    published=paths.root/'task2/artifacts'/version;published.mkdir(parents=True);(published/'manifest.json').write_bytes(b'z'*75)
+    index=paths.task(job.task_id).extraction/'relation-ownership.json';index.parent.mkdir(parents=True,exist_ok=True)
+    index.write_text(json.dumps({'versions':[version]}))
+    restarted=platform_module('runtime').RuntimeSteps(jobs,paths,processing_fingerprint=job.processing_fingerprint)
+    assert restarted._actual(lease)>=before+225+index.stat().st_size
+    restarted._reserve(lease,0,settle=True)
+    stored=connection.db.execute('SELECT reserved_bytes FROM t3_jobs WHERE task_id=?',(job.task_id,)).fetchone()[0]
+    assert stored==restarted._actual(lease)
+    connection.db.close()

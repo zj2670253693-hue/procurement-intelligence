@@ -70,6 +70,20 @@ def test_source_download_is_attachment_nosniff(web_case):
     assert response.headers["x-content-type-options"]=="nosniff"
 
 
+def test_partial_coverage_is_explicit_and_owner_scoped(web_case):
+    import json
+    client,connection,job,prepared=web_case
+    connection.db.execute("UPDATE t3_jobs SET status='partial',manifest_json=? WHERE task_id=?",(json.dumps({'inputs':[{'announcement_id':prepared.announcement_id},{'announcement_id':'t20990101_2'}]}),job.task_id))
+    connection.db.execute("UPDATE t3_datasets SET availability='partial' WHERE upload_dataset_id=?",(job.upload_dataset_id,));connection.commit()
+    url=f'/api/platform/datasets/{job.upload_dataset_id}/coverage'
+    response=client.get(url)
+    assert response.status_code==200,response.text
+    assert response.json()['availability']=='partial'
+    assert response.json()['processed_announcements']==1 and response.json()['total_announcements']==2
+    client.cookies.set('t3_session','b'*64)
+    assert client.get(url).status_code==403
+
+
 def test_auth_cookies_and_http_rejected(web_case):
     client,*_=web_case
     response=client.post("/api/platform/auth/login",json={"username":"synthetic","password":"synthetic-only-password"})
@@ -78,6 +92,38 @@ def test_auth_cookies_and_http_rejected(web_case):
     assert "HttpOnly" in cookie and "Secure" in cookie and "SameSite=strict" in cookie
     insecure=TestClient(client.app,base_url="http://testserver")
     assert insecure.post("/api/platform/auth/login",json={"username":"synthetic","password":"synthetic-only-password"},headers={"X-Forwarded-Proto":"https"}).status_code==403
+
+
+def test_login_sync_verification_is_not_on_asgi_event_loop(platform_module):
+    import asyncio,threading
+    import httpx
+    owner_thread=threading.get_ident()
+    class Auth:
+        origin='https://testserver'
+        def login(self,*args):
+            assert threading.get_ident()!=owner_thread,'Synchronous SQL/scrypt blocks ASGI loop'
+            return SimpleNamespace(token='a'*64,csrf='b'*64,actor=SimpleNamespace(user_id='c'*32,role='reviewer'))
+    services=SimpleNamespace(auth=Auth(),secure=True)
+    app=FastAPI();app.include_router(platform_module('web_auth').router(lambda:services))
+    async def request():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='https://testserver') as client:
+            response=await client.post('/api/platform/auth/login',json={'username':'synthetic','password':'synthetic-only-password'})
+            assert response.status_code==200
+    asyncio.run(request())
+
+
+def test_login_admission_limits_rate_and_inflight_work(platform_module):
+    module=platform_module('web_auth');now=[0]
+    assert hasattr(module,'LoginAdmission'),'Missing bounded login admission'
+    gate=module.LoginAdmission(clock=lambda:now[0],max_attempts=2,window_seconds=60,max_inflight=1)
+    with gate.enter('synthetic-address'):
+        with pytest.raises(platform_module('contracts').PlatformError) as busy:
+            with gate.enter('synthetic-address'): pass
+        assert busy.value.http_status==429
+    with pytest.raises(platform_module('contracts').PlatformError):
+        with gate.enter('synthetic-address'): pass
+    now[0]=61
+    with gate.enter('synthetic-address'): pass
 
 
 def test_legacy_upload_cannot_touch_baseline_even_with_model_flag(platform_module,web_case,monkeypatch):
@@ -99,6 +145,16 @@ def test_disabled_install_fails_closed(platform_module,tmp_path):
     client=TestClient(app)
     assert client.get("/api/platform/tasks").status_code==503
     assert client.post("/api/upload",files={"files":("t20990101_1.html",b"x","text/html")}).status_code==503
+
+
+def test_anonymous_shared_actor_cannot_authorize_any_task(platform_module,web_case,tmp_path):
+    client,connection,*_=web_case
+    service_module=platform_module('services')
+    services=service_module.Services(connection,platform_module('paths').RuntimePaths(tmp_path),
+        processing_fingerprint='a'*64,public_demo=True,guest_actor=platform_module('contracts').Actor('f'*32,'guest'))
+    with pytest.raises(platform_module('contracts').PlatformError) as denied:
+        services.actor(SimpleNamespace(cookies={}),mutation=True,guest=True)
+    assert denied.value.http_status==401
 
 
 def test_chunk_resume_and_explicit_retry_guards(platform_module,web_case):

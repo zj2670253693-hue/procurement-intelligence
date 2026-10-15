@@ -28,6 +28,7 @@ export function listTasks() {
 }
 export const listDatasets=()=>client.get('/platform/datasets')
 export const capabilities=()=>client.get('/platform/capabilities')
+export const datasetCoverage=id=>client.get(`/platform/datasets/${id}/coverage`)
 export const beginUpload=body=>client.post('/platform/uploads',body)
 export const resumeUpload=id=>client.get(`/platform/uploads/${id}`)
 export const sendPart=(task,id,part,blob,signal)=>client.put(`/platform/uploads/${task}/files/${id}/parts/${part}`,blob,{headers:{'Content-Type':'application/octet-stream'},signal,timeout:120000})

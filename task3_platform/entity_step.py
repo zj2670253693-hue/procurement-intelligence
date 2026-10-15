@@ -24,6 +24,9 @@ class EntityStepResult:
 
 
 def source_has_targets(content):
+    from tools.task1_standard_export.standard_export import classify
+    if classify(content.title,content.html_text)=='intention_only':
+        return False
     if "主要标的信息" not in content.html_text:
         return False
     for table in content.html_tables:

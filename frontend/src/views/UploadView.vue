@@ -2,7 +2,7 @@
   <div>
     <el-alert v-if="error" :title="error" type="error" :closable="false" />
     <el-alert title="只解析不产生实体或交易结果。付费抽取需平台账号、服务器有限预算授权和已验证计数策略；不会使用旧Bearer令牌。" type="info" :closable="false" />
-    <el-alert v-if="caps.public_demo" title="匿名演示仅接受1篇不超过1MB的HTML；演示批次属于公开演示空间，不要上传私有资料。" type="warning" :closable="false" />
+    <el-alert title="匿名上传尚未开放；请使用各自的平台账号，上传任务不与其他用户共用。" type="warning" :closable="false" />
     <el-card class="mt-16" shadow="never"><template #header>批量上传与断点恢复</template>
       <el-upload v-model:file-list="fileList" drag multiple :auto-upload="false" accept=".html,.htm,.zip" :disabled="uploading"><el-icon class="el-icon--upload"><UploadFilled/></el-icon><div>选择HTML和同名ZIP，或规范整包ZIP；单文件最多{{ Math.floor((caps.file_bytes||0)/1024**3) }}GiB</div></el-upload>
       <p>刷新后需重新选择原始文件；服务器会校验相同清单并跳过已确认分片。页面不保存文件正文、密码或API密钥。</p>

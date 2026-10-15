@@ -3,7 +3,6 @@ from contextlib import contextmanager
 from dataclasses import asdict
 from functools import lru_cache
 import hashlib
-import hmac
 import os
 from pathlib import Path
 import re
@@ -63,8 +62,8 @@ class Services:
             if mutation:
                 self.auth.require_csrf(token, request.headers.get("x-csrf-token"), request.headers.get("origin"))
             return actor
-        if guest and self.guest_actor is not None:
-            return self.guest_actor
+        # A configured shared guest owner is NOT a browser-bound identity.
+        # Anonymous entry remains disabled until isolated guest sessions exist.
         raise PlatformError("session_required", 401)
 
     def task_dto(self, actor, task_id):
@@ -125,17 +124,6 @@ def configured_services(request,backend_root):
         proxies = tuple(value for value in os.getenv("TASK3_TRUSTED_PROXIES", "").split(",") if value)
         secure = secure_transport(request.url.scheme, request.client.host if request.client else None,
             request.headers, proxies, controlled_channel=os.getenv("TASK3_CONTROLLED_LOOPBACK", "0") == "1")
-        guest, source_hash = None, None
-        secret, guest_id = os.getenv("TASK3_GUEST_HMAC_SECRET", ""), os.getenv("TASK3_GUEST_USER_ID", "")
-        public = os.getenv("TASK3_PUBLIC_DEMO", "0") == "1"
-        if public and re.fullmatch(r"[0-9a-f]{32}", guest_id) and len(secret) >= 32:
-            with manager._conn.cursor() as cursor:
-                cursor.execute("SELECT role,enabled FROM t3_users WHERE user_id=%s", (guest_id,))
-                row = cursor.fetchone()
-            if row and row["role"] == "guest" and row["enabled"]:
-                guest = Actor(guest_id, "guest")
-                # Forwarded IP is deliberately not trusted for guest quota identity.
-                source_hash = hmac.new(secret.encode(), (request.client.host if request.client else "unknown").encode(), hashlib.sha256).hexdigest()
         def baseline():
             nonlocal official_manager
             from database.dao import DataRepository
@@ -143,7 +131,7 @@ def configured_services(request,backend_root):
             official_manager=DatabaseManager().connect(create_db=False,verbose=False)
             return BaselineAdapter(DataRepository(official_manager),Path(backend_root)/"release_assets")
         yield Services(manager._conn, RuntimePaths(Path(runtime)), jobs=jobs, auth=AuthService(manager._conn, origin=origin),
-            secure=secure, public_demo=public, guest_source_hash=source_hash, guest_actor=guest,baseline_factory=baseline)
+            secure=secure, public_demo=False, baseline_factory=baseline)
     finally:
         if official_manager is not None: official_manager.close(verbose=False)
         manager.close(verbose=False)
