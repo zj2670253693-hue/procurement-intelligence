@@ -76,3 +76,24 @@ def test_preparation_can_never_manufacture_a_cutover_pass(tmp_path):
     assert report['passed'] is False and report['ready_to_cutover'] is False
     assert report['new_model_calls']==0 and 'real_mysql' in report['missing_gates']
     assert report['environment']['database_connected'] is False
+
+
+def test_mysql_probe_only_hashes_whitelisted_tables_and_uses_isolated_environment(tmp_path):
+    module=load('run_mysql_acceptance')
+    class Cursor:
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+        def execute(self,sql):assert sql.startswith('SELECT * FROM ')
+        def __iter__(self):return iter([{'id':1,'value':'synthetic-private-source'}])
+    class Connection:
+        def begin(self):pass
+        def rollback(self):pass
+        def cursor(self):return Cursor()
+    values=module.fingerprints(Connection())
+    assert len(values)==9 and all(value['rows']==1 for value in values.values())
+    assert 'synthetic-private-source' not in str(values)
+    config={'DB_HOST':'127.0.0.1','DB_PORT':'3306','DB_USER':'synthetic','DB_PASSWORD':'synthetic-secret','DB_NAME':'procurement_kg_v14_20261014'}
+    env=module.acceptance_environment(config,'procurement_task3_accept_synthetic',tmp_path,tmp_path/'test-deps')
+    assert env['TASK3_MYSQL_TEST_DB']==env['DB_NAME']=='procurement_task3_accept_synthetic'
+    assert env['TASK3_PAID_ENABLED']=='0' and 'DEEPSEEK_API_KEY' not in env
+    with pytest.raises(ValueError):module.acceptance_environment(config,config['DB_NAME'],tmp_path,tmp_path/'test-deps')

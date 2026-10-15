@@ -48,6 +48,8 @@ python -B -m pytest task3_tests/test_mysql_integration.py -m mysql_integration -
 
 测试只连接本机 127.0.0.1；保留本次合成记录便于排查，不删表、不清库。检查实际 DECIMAL(65,30)、事务失败回滚、同公告不同批次、owner 拒绝、竞争领取、租约恢复和旧 epoch 拦截。未配置时 skip，**skip 不代表真实 SQL 通过**。
 
+也可由管理员/已获新库授权的操作员运行 `deploy/task3/run_mysql_acceptance.py --database <新验收库> --allow-test-writes --test-dependencies <独立测试依赖目录> --output <不存在的新报告目录>`。它从服务器环境文件读取凭据但不回显；只读流式哈希旧任务一五表及任务二四表，然后以清理过、模型密钥移除且禁费的环境运行真实SQL测试，再核对旧表指纹。输出 `real_mysql_boundary_probe`，不是完整发布验收；skip、测试失败或旧库变化均不得算通过。报告包含哈希/计数，不含旧原文行。
+
 ## 浏览器及性能
 
 `deploy/task3/browser_acceptance.cjs` 使用操作员提供的 Playwright/浏览器，对真实 HTTPS、已发布自有批次做五种查询冷/热两轮，测量从请求前到表格/关系图完成两帧渲染。账号仅在环境/浏览器内存中，输出不含密码/cookie。设置 `TASK3_ACCEPT_ORIGIN`、`TASK3_ACCEPT_DATASET`、`TASK3_ACCEPT_USERNAME`、`TASK3_ACCEPT_PASSWORD` 后执行。不能将本地 mock API 的 315.92ms 均值当成阿里云结论。
