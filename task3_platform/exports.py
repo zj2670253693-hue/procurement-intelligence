@@ -52,6 +52,15 @@ def verify_workbook(path, tables, headers):
     return True
 
 
+def _core_root():
+    """Directory that actually contains the frozen data_loader/extractor packages."""
+    here = Path(__file__).resolve().parents[1]
+    for candidate in (here, here / "task1_entity_extraction"):
+        if (candidate / "data_loader").is_dir() and (candidate / "extractor").is_dir():
+            return candidate
+    return here
+
+
 def build_exports(job, inputs, raw_path, destination, *, pulse=lambda: None, timeout=360, max_output_bytes=512 * 1024**2):
     validate_task_id(job.task_id)
     destination = reject_link_ancestors(Path(destination))
@@ -75,7 +84,12 @@ def build_exports(job, inputs, raw_path, destination, *, pulse=lambda: None, tim
     request_path.write_bytes(canonical_bytes({"task_id": job.task_id, "mode": job.mode, "raw_path": str(raw_path), "max_output_bytes": max_output_bytes,
         "destination": str(destination), "sources": [{"announcement_id": item.announcement_id, "html_path": str(item.html_path), "html_sha": item.html_sha} for item in inputs]}))
     environment = {key: value for key, value in os.environ.items() if key.upper() in {"PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "LANG", "LC_ALL"}}
-    environment.update(PYTHONPATH=os.pathsep.join((str(ROOT), str(ROOT / "task1_entity_extraction"))),
+    # The frozen export tool verifies that the HTML parser it loaded lives under its
+    # configured backend. A flat release keeps data_loader/extractor directly under
+    # this root, so the tool's nested default would reject the real parser.
+    core_root = _core_root()
+    environment.update(TASK1_STANDARD_BACKEND=str(core_root),
+                       PYTHONPATH=os.pathsep.join((str(ROOT), str(core_root))),
                        PYTHONUTF8="1", PYTHONDONTWRITEBYTECODE="1", PYTHON_DOTENV_DISABLED="1")
     child = subprocess.Popen([sys.executable, "-B", "-m", "task3_platform.export_child", str(request_path)],
                              cwd=ROOT, env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
