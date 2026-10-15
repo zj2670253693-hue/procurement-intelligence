@@ -31,7 +31,11 @@ def numeric_projection(raw, field, *, declared_unit=None):
         value = Decimal(number.replace(",", ""))
         if field != "quantity" and unit == "元":
             value = value / Decimal("10000")
-        unit = unit if field == "quantity" else "万元"
+        if field != "quantity":
+            # The numeric column is always 万元 on this platform, so the stored unit must
+            # say so. Labelling a 万元 number as 元 (or the reverse) is how 123,456.78元
+            # ended up readable as 12.345678.
+            unit = "万元"
     if value < 0 or max(value.adjusted() + 1, 1) > 35 or max(-value.as_tuple().exponent, 0) > 30:
         return None, None
     return value, unit
