@@ -247,13 +247,18 @@ def retarget_https_server(text,release,port):
             inside=True;served=False
         elif stripped=='}':
             inside=False
-        match=re.fullmatch(r'(\s*)proxy_pass\s+http://127\.0\.0\.1:8000([/;].*)?',line)
+        # Preserve the original separator and any downstream path exactly:
+        # `http://127.0.0.1:8000;` stays `;`, `.../docs;` must become `:port/docs;`,
+        # never `:port;/docs;` or `:port;;`.
+        match=re.fullmatch(r'(\s*)proxy_pass\s+http://127\.0\.0\.1:8000(?=[/;\s]|$)(.*)',line)
         if not match:
             output.append(line);continue
         if inside and served:fail('duplicate_https_proxy_endpoint')
         if inside:served=True
         rewritten+=1
-        output.append('{}proxy_pass http://127.0.0.1:{};{}'.format(match.group(1),port,match.group(2) or ''))
+        tail=match.group(2)
+        endpoint='http://127.0.0.1:'+str(port)+('' if tail[:1] in {';','/'} else '/')
+        output.append(match.group(1)+'proxy_pass '+endpoint+tail)
     if rewritten!=root.count('proxy_pass http://127.0.0.1:8000') or rewritten<1:fail('unexpected_https_proxy_endpoints')
     updated='\n'.join(output)
     if ':8000' in updated:fail('incomplete_endpoint_rewrite')

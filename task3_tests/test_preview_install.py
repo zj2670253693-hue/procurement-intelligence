@@ -150,6 +150,25 @@ def test_runtime_root_accepts_real_path_and_rejects_release_interior():
         with pytest.raises(ValueError):module.require_runtime(bad,str(release))
 
 
+def test_nginx_retarget_preserves_upstream_paths_and_separators():
+    """The live site routes /docs and /openapi.json too; separators must survive."""
+    module=load('install_preview')
+    marker='        proxy_pass http://127.0.0.1:8000/docs;'
+    assert marker in HTTPS_BLOCK
+    live=HTTPS_BLOCK.replace(marker,marker+'\n    }\n\n    location = /openapi.json {\n        proxy_pass http://127.0.0.1:8000/openapi.json;')
+    assert live.split('listen 80 default_server;')[0].count(':8000')==3, live
+    assert live.count(':8000')==3
+    result=module.retarget_https_server(live+HTTP_BLOCK,RELEASE,18080)
+    assert 'proxy_pass http://127.0.0.1:18080;' in result
+    assert 'proxy_pass http://127.0.0.1:18080/docs;' in result
+    assert 'proxy_pass http://127.0.0.1:18080/openapi.json;' in result
+    head=result[:result.index('listen 80 default_server;')]
+    for broken in (';;',';/',':18080;docs','18080//','8000;'):
+        assert broken not in head, broken
+    assert result.count(':18080')==3
+    assert ':8000' not in result[result.index('listen 443 ssl;'):result.index('listen 80 default_server;')]
+
+
 def test_nginx_retarget_fails_closed_on_unexpected_topology():
     module=load('install_preview')
     with pytest.raises(ValueError):module.retarget_https_server(HTTP_BLOCK,RELEASE,18080)
