@@ -109,6 +109,16 @@ def test_preview_environment_keeps_credentials_strips_model_keys_and_forces_isol
         runtime_root='/srv/procurement-app/shared/runtime/task3-preview',public_origin='http://47.237.97.246',official_database=OFFICIAL)
 
 
+def test_prepared_release_is_traversable_by_the_web_server():
+    """A 750 release root made nginx return 500 on static assets while the API worked."""
+    module=load('prepare_preview')
+    source=(Path(__file__).resolve().parents[1]/'deploy/task3/prepare_preview.py').read_text(encoding='utf-8')
+    assert 'target.mkdir(mode=0o755)' in source
+    assert 'os.walk(target)' in source and 'os.chmod(directory,0o755)' in source
+    assert '0o750' not in source.replace('0o750)','')
+    assert hasattr(module,'prepare_preview')
+
+
 def test_preview_units_never_point_at_production_paths_and_stay_bounded():
     module=load('install_preview')
     from pathlib import Path as _Path

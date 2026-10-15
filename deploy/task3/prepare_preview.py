@@ -6,6 +6,7 @@ partial directories are retained; existing destinations are never overwritten.
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
@@ -114,7 +115,7 @@ def prepare_preview(bundle,destination,old_release,*,expected_bundle_sha,expecte
     with zipfile.ZipFile(bundle) as archive:
         manifest,code_bytes=validate_bundle(archive)
         if shutil.disk_usage(target.parent).free<code_bytes+asset_bytes+4*1024**3:raise ValueError('preview_disk_reserve_required')
-        target.mkdir(mode=0o750)
+        target.mkdir(mode=0o755)
         for name,digest in manifest['files'].items():
             path=target/PurePosixPath(name);path.parent.mkdir(parents=True,exist_ok=True)
             with archive.open(name) as source,path.open('xb') as out:shutil.copyfileobj(source,out,1024**2)
@@ -123,6 +124,13 @@ def prepare_preview(bundle,destination,old_release,*,expected_bundle_sha,expecte
         source=old/PurePosixPath(name);path=target/PurePosixPath(name);path.parent.mkdir(parents=True,exist_ok=True)
         with source.open('rb') as stream,path.open('xb') as out:shutil.copyfileobj(stream,out,1024**2)
         if file_sha(path)!=digest or file_sha(source)!=digest:raise ValueError('frozen_asset_changed_during_copy')
+    # Nginx (www-data) must traverse the release to serve frontend-dist; a 750 root
+    # makes the HTTPS static path return 500 while the API still answers. Directories
+    # only: no other-user write access is granted anywhere.
+    if os.name=='posix':
+        for directory,_,files in os.walk(target):
+            os.chmod(directory,0o755)
+            for name in files:os.chmod(os.path.join(directory,name),0o644)
     if file_sha(bundle)!=expected_bundle_sha or file_sha(parent_manifest)!=expected_old_manifest_sha:raise ValueError('preview_inputs_changed')
     full={'kind':'task3_isolated_preview_release','version':1,'source_commit':manifest['source_commit'],
         'code_bundle_sha256':expected_bundle_sha,'official_parent_manifest_sha256':expected_old_manifest_sha,
