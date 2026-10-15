@@ -1,0 +1,35 @@
+[Unit]
+Description=Procurement isolated single processing worker
+After=network-online.target mysql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=zhoujin
+Group=projectteam
+WorkingDirectory=/srv/procurement-app/current/backend
+EnvironmentFile=/etc/procurement-app/procurement.env
+Environment=PYTHONUNBUFFERED=1
+Environment=OMP_NUM_THREADS=1
+Environment=OPENBLAS_NUM_THREADS=1
+Environment=MKL_NUM_THREADS=1
+ExecStart=/srv/procurement-app/shared/venv/bin/python -B -m task3_platform.runtime
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=15s
+KillMode=control-group
+SendSIGKILL=yes
+MemoryAccounting=yes
+MemoryMax=1024M
+MemorySwapMax=0
+CPUQuota=100%
+TasksMax=32
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/procurement-app/shared/runtime
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -73,3 +73,11 @@ task1_entity_extraction/release_assets/
 deploy/task1-task2/release/
 deploy/task1-task2/runtime-preview/
 deploy/task1-task2/admin-cutover-result.json
+
+# Task3 uploads, receipts, acceptance evidence and credentials remain private.
+/runtime/
+task3-runtime/
+deploy/task3/acceptance-private/
+deploy/task3/release/
+deploy/task3/*-acceptance.json
+deploy/task3/*-cutover-result.json
