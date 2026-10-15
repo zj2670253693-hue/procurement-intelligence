@@ -84,7 +84,30 @@ API准入和worker每次发送前重新核对开关/策略身份；撤销、文�
 
 SDK 自动重试为0；每次请求先持久 reserve/sent，usage 不明保持 null/uncertain 并阻止自动重发。离线关系构建 model_calls=0 与上游抽取费用分列。
 
+## 隔离预览安装（显式管理员操作）
+
+`deploy/task3/install_preview.py` 只在全部前置校验通过后才写入：非 root、主机名不符、未传 `--apply`、目标库不是 `procurement_task3_accept_` 前缀、`TASK3_RUNTIME_ROOT` 位于 release 内、公开地址不是 `https://`、release 清单 SHA 不符、Nginx 结构不符合“一个80 + 一个443”都会在任何写入前失败。
+
+它创建独立的预览 API（`127.0.0.1:18080`，`MemoryMax=768M`）和预览 worker（`MemoryMax=1024M`），使用独立环境文件，**不改** `/srv/procurement-app/current`、旧 `procurement.env`、旧 worker，也不做数据库 DDL；`DB_NAME`/`TASK2_DATASET_ID` 原样保留，只新增 `TASK3_*` 并把 `TASK3_PAID_ENABLED`、`PAID_INFERENCE_ENABLED` 置 0。环境文件里的模型密钥会被剔除且不打印。
+
+Nginx 只改 HTTPS(443) server 块：`root` 指向预览 `frontend-dist`，`/api/` 与 `/docs` 指向 `127.0.0.1:18080`；HTTP(80) 展示块保持逐字节不变。任何 `/api/` 路径内出现两个上游指令即拒绝执行。写入前会备份站点文件为 `<site>.task3-preview-backup`。
+
+```text
+sudo /srv/procurement-app/shared/venv/bin/python -B deploy/task3/install_preview.py \
+  --apply --expected-host <hostname> \
+  --release /srv/procurement-app/releases/task3-preview-<编号> \
+  --release-manifest-sha256 <该目录 manifest 的 SHA256> \
+  --source-environment-file /etc/procurement-app/procurement.env \
+  --environment-file /etc/procurement-app/procurement-task3-preview.env \
+  --database procurement_task3_accept_<编号> --official-database <现有 DB_NAME> \
+  --runtime-root /srv/procurement-app/shared/runtime/task3-preview \
+  --public-origin https://<同一地址> --nginx-site <当前 443 站点文件> --port 18080
+```
+
+安装完成后仍需：真实迁移与三个平台账号、三用户并发加后台处理、cgroup 峰值、五分钟内五场景冷/热渲染、另行授权的有限模型样本。报告中的 `task3_deployed` 只表示预览服务已安装，**不代表**完整验收或正式切换。
+
 ## 发布及回滚前不可省略
+
 
 所有实际验收与全分支独立审查修复完成后，才制作管理员切换脚本：冻结新包清单和各文件哈希；对旧任务一五表及任务二事实/证据/版本做完整前后指纹；保留旧 env、旧 release、旧 runtime、旧数据库；原子替换新环境和 current 链接。新环境保留旧 DB_NAME/TASK2_DATASET_ID，只新增 TASK3_* 配置，付费默认关闭。
 
