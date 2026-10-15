@@ -105,15 +105,9 @@ def build_exports(job, inputs, raw_path, destination, *, pulse=lambda: None, tim
             except subprocess.TimeoutExpired:
                 pass
         if child.returncode != 0:
-            # Discarding this made a real failure undiagnosable in production.
-            detail = b""
-            if child.stderr is not None:
-                try:
-                    detail = child.stderr.read() or b""
-                except Exception:
-                    detail = b""
-            trace = detail.decode("utf-8", "replace").strip().splitlines()
-            raise PlatformError("export_child_failed:" + (trace[-1][:200] if trace else "no_stderr"))
+            # This code is persisted in task diagnostics and returned to the
+            # browser. Child stderr can contain private paths or source text.
+            raise PlatformError("export_child_failed")
     finally:
         if child.poll() is None:
             child.kill()

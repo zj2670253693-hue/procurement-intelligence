@@ -159,11 +159,30 @@ def test_readback_rejects_numeric_type_and_gray_style_tamper(platform_module, ex
         module.verify_workbook(altered, projection["tables"], projection["headers"])
 
 
-def test_export_child_stderr_is_surfaced_not_discarded():
-    """A bare export_child_failed made a real production failure undiagnosable."""
-    source = (Path(__file__).resolve().parents[1] / "task3_platform/exports.py").read_text(encoding="utf-8")
-    assert "stderr=subprocess.PIPE" in source
-    assert "stderr=subprocess.DEVNULL" not in source
-    assert 'raise PlatformError("export_child_failed:"' in source
-    assert "no_stderr" in source
-    assert "child.stderr.close()" in source
+@pytest.mark.parametrize("stderr", [
+    b"Traceback (most recent call last):\nPermissionError: '/srv/private/task3/input.html' synthetic-secret-marker\n",
+    b"",
+])
+def test_export_child_failure_has_stable_public_code(platform_module, export_input, monkeypatch, capsys, stderr):
+    """A child error can reach task diagnostics, so its stderr is private."""
+    import io
+    module = platform_module("exports")
+    job, inputs, raw, task, *_ = export_input
+
+    class FailedChild:
+        returncode = 1
+        def __init__(self):
+            self.stderr = io.BytesIO(stderr)
+        def poll(self):
+            return self.returncode
+
+    child = FailedChild()
+    monkeypatch.setattr(module.subprocess, "Popen", lambda *args, **kwargs: child)
+    with pytest.raises(platform_module("contracts").PlatformError) as rejected:
+        module.build_exports(job, inputs, raw, task.exports)
+    assert rejected.value.code == "export_child_failed"
+    assert str(rejected.value) == "export_child_failed"
+    assert child.stderr.closed
+    output = capsys.readouterr()
+    assert "synthetic-secret-marker" not in output.out + output.err
+    assert "/srv/private" not in output.out + output.err
