@@ -96,6 +96,8 @@ def run_parse_child(prepared, limits, *, pulse=lambda: None):
     environment.update(PYTHONPATH=os.pathsep.join((str(ROOT), str(ROOT / "task1_entity_extraction"))),
                        PYTHONUTF8="1", PYTHONDONTWRITEBYTECODE="1", PYTHON_DOTENV_DISABLED="1",
                        TEMP=str(temporary_root), TMP=str(temporary_root), TMPDIR=str(temporary_root))
+    from .processing_profile import parser_settings
+    environment.update(parser_settings())
     child = subprocess.Popen([sys.executable, "-B", "-m", "task3_platform.parse_child", str(request_path), str(response_path)],
                              cwd=ROOT, env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     start = time.monotonic()

@@ -18,15 +18,24 @@ from .uploads import UploadService
 
 
 @lru_cache(maxsize=1)
-def processing_fingerprint():
+def _code_fingerprint():
     root = Path(__file__).resolve().parents[1]
     digest = hashlib.sha256(b"task3-isolated-pipeline-v1")
-    for directory in (root / "task3_platform", root / "task1_entity_extraction", root / "tools/task1_standard_export"):
-        for path in sorted(directory.rglob("*.py")):
-            if not any(name in path.parts for name in ("tests", "__pycache__", ".venv")):
-                digest.update(path.relative_to(root).as_posix().encode())
-                digest.update(path.read_bytes())
+    core=root/'task1_entity_extraction' if (root/'task1_entity_extraction').is_dir() else root
+    files=set()
+    for directory in (root/'task3_platform',core,root/'tools/task1_standard_export',root/'task2_relationship_analysis',root/'task2_query_service'):
+        for path in directory.rglob('*.py'):
+            if not any(name in path.relative_to(root).parts for name in ('tests','task2_tests','task3_tests','__pycache__','.venv','venv','release_assets','sample_data','runtime')):
+                files.add(path)
+    for path in sorted(files):
+        digest.update(path.relative_to(root).as_posix().encode())
+        digest.update(path.read_bytes())
     return digest.hexdigest()
+
+
+def processing_fingerprint():
+    from .processing_profile import identity
+    return hashlib.sha256(canonical_bytes({'code':_code_fingerprint(),'effective':identity()})).hexdigest()
 
 
 class Services:
@@ -130,8 +139,11 @@ def configured_services(request,backend_root):
             from .baseline import BaselineAdapter
             official_manager=DatabaseManager().connect(create_db=False,verbose=False)
             return BaselineAdapter(DataRepository(official_manager),Path(backend_root)/"release_assets")
+        from .inference_configuration import safe_configuration
+        inference=safe_configuration()  # Metadata/hash validation only; no SDK/tokenizer.
         yield Services(manager._conn, RuntimePaths(Path(runtime)), jobs=jobs, auth=AuthService(manager._conn, origin=origin),
-            secure=secure, public_demo=False, baseline_factory=baseline)
+            secure=secure, public_demo=False, baseline_factory=baseline,
+            extract_authorizer=inference.authorize_upload if inference else None)
     finally:
         if official_manager is not None: official_manager.close(verbose=False)
         manager.close(verbose=False)

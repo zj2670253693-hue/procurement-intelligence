@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "provider": "deepseek",
+  "model": "REPLACE_WITH_VERIFIED_REQUEST_MODEL",
+  "base_url": "https://example.invalid/v1",
+  "authorized_owner_ids": ["00000000000000000000000000000000"],
+  "maximum_budget": {"max_calls": 8, "max_input_tokens": 64000, "max_output_tokens": 32768},
+  "generation": {"temperature": "0.1", "max_tokens": 8192},
+  "counter": {
+    "path": "/etc/procurement-app/counters/verified_counter.py",
+    "source_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "profile_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "verification": {"approved": false, "record_sha256": "0000000000000000000000000000000000000000000000000000000000000000"}
+}

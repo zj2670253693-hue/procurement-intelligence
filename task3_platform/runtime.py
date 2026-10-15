@@ -143,6 +143,12 @@ class RuntimeSteps:
         return {"relations_verified":True,"exports_verified":True,"dataset_published":True}
 
 
+def configured_runtime_steps(jobs,paths):
+    from .inference_configuration import safe_configuration
+    configuration=safe_configuration()
+    return RuntimeSteps(jobs,paths,transport_factory=configuration.transport_factory if configuration else None)
+
+
 def main():
     """Standalone systemd worker. DB migration is a separate explicit admin step."""
     from database.connection import DatabaseConfig,DatabaseManager
@@ -157,7 +163,7 @@ def main():
     try:
         jobs=JobStore(manager._conn,limits=Limits.from_env(os.environ))
         paths=RuntimePaths(Path(os.environ["TASK3_RUNTIME_ROOT"]))
-        worker=ProcessingWorker(jobs,RuntimeSteps(jobs,paths),_now)
+        worker=ProcessingWorker(jobs,configured_runtime_steps(jobs,paths),_now)
         while True:
             worker.run_once()
             time.sleep(2)

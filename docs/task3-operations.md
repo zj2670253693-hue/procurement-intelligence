@@ -4,7 +4,7 @@
 
 任务一、二线上版本不变。此分支已实现上传、账号、持久队列、实体/关系数据集隔离、筛选、来源与导出、前端交互；已进行本地合成测试与真实浏览器渲染检查。
 
-**尚不是已验收的云端发布版本。** 未连接真实隔离 MySQL 做本阶段验收，未验证公网 HTTPS、三用户同时查询加后台处理、Ubuntu cgroup 总内存、真实模型小样本。生产组合默认不装载付费 transport/counter；即使设置旧 `PAID_INFERENCE_ENABLED` 也不能绕过这一限制。当前 `finalize_release()` 仅校验操作员报告结构，返回 `applied=false`，没有可执行的特权切换路径。不得将合成数据报告改名后充当真实验收报告。
+**尚不是已验收的云端发布版本。** 还需真实隔离 MySQL、公网 HTTPS、三用户同时查询加后台处理、Ubuntu cgroup 总内存、真实模型小样本。生产API/worker已接入同一服务端配置工厂，但实际付费默认关闭；旧 `PAID_INFERENCE_ENABLED` 不能绕过。当前 `finalize_release()` 仅校验操作员报告结构，返回 `applied=false`，没有可执行的特权切换路径。不得将合成数据报告改名后充当真实验收报告。
 
 ## 数据与权限边界
 
@@ -56,7 +56,13 @@ python -B -m pytest task3_tests/test_mysql_integration.py -m mysql_integration -
 
 ## 模型与费用（当前关闭）
 
-真实抽取必须另行取得小样本授权，明确 owner/provider/model、最多3篇、最多8次请求及有限输入/输出 token 预算。64000/32768 只是计划示例，不是授权。必须先实现并核实与准确模型版本一致的 token 上界 counter/profile 和生产 transport 配置；不能把任意字节估计标记 verified，不能只打开旧环境开关就调用。
+真实抽取必须另行取得小样本授权，明确 owner/provider/model、最多3篇、最多8次请求及有限输入/输出 token 预算。64000/32768 只是计划示例，不是授权。生产接线已有，但必须另行提供并核实与准确模型版本一致的 token 上界 counter/profile；不能把任意字节估计标记 verified，不能只打开旧环境开关就调用。
+
+服务端需同时设置 `TASK3_PAID_ENABLED=1` 和 `TASK3_INFERENCE_PROFILE=<私有绝对路径>`。策略结构见 `deploy/task3/inference-profile.example.json`（示例approved=false，不可直接启用）。策略包含明确owner、provider/model/HTTPS base URL、有限总预算、生成参数、counter代码及验证记录哈希。密钥仅来自服务器对应环境变量，不放策略/请求/浏览器。
+
+策略及其同目录 `counters/` 内插件必须无软链接、不可group/world写；部署建议root所有、worker只读。API只核验有限大小的策略/代码哈希和已登记记录，不实例化SDK/tokenizer；worker首次处理时才加载已登记代码的 `build_counter()`，要求 `verified is True`、`profile_sha256`完全匹配且 `supports(provider,model)` 为真，再建立max_retries=0的账本transport。counter需实现 `upper_bound(InferenceRequest)->正整数`，其正确性由实际模型/模板/tokenizer版本验证记录证明，**不是approved布尔值或源码哈希本身证明**。验证记录、权重/tokenizer资产、实际策略和密钥不进Git。
+
+API准入和worker每次发送前重新核对开关/策略身份；撤销、文件漂移、预算不足、counter验证失败均停止，不自动降级到旧客户端。计数器插件属于受信任的管理员代码，不接受网页上传替换；没有已核实插件时保留关闭。发布后更改策略/模型/生成或解析配置会改变processing指纹；worker需重启载入新配置，不能复用旧任务冒充新结果。API密钥轮换本身不是算法身份，但应安全重启worker以切换持有的客户端。
 
 SDK 自动重试为0；每次请求先持久 reserve/sent，usage 不明保持 null/uncertain 并阻止自动重发。离线关系构建 model_calls=0 与上游抽取费用分列。
 
