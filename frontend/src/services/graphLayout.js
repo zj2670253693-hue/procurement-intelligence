@@ -8,7 +8,7 @@
  *  - each edge leaves a node's right edge and enters the next node's left edge, so
  *    its vertical run happens strictly in the gutter between columns and can never
  *    be drawn across an unrelated node;
- *  - labels render once per (source, kind) group, on a measured backdrop.
+ *  - every fact has its own measured label, with collision-adjusted coordinates.
  */
 
 export const NODE = { width: 208, height: 40, gapX: 96, gapY: 22, paddingX: 14, minWidth: 132 }
@@ -195,7 +195,6 @@ export function buildGraphLayout(graph = {}) {
     })
   }
 
-  const labelled = new Set()
   // One vertical lane per edge inside each gutter, so converging edges do not stack
   // into a single thick line.
   const lanes = new Map()
@@ -221,10 +220,7 @@ export function buildGraphLayout(graph = {}) {
     // still sit to the right of its neighbour.
     const forward = endX >= startX
     const label = kindText(edge.kind) || edge.kindLabel || ''
-    const group = `${edge.from}|${edge.kind}`
-    const showLabel = Boolean(label) && !labelled.has(group)
-    if (showLabel) labelled.add(group)
-    const chip = showLabel ? measureChip(label) : null
+    const chip = label ? measureChip(label) : null
     const lane = laneIndex.get(edge.id) || 0
     let midX
     if (forward && toColumn > fromColumn) {
@@ -244,7 +240,7 @@ export function buildGraphLayout(graph = {}) {
       startX, startY: from.y, endX, endY: to.y, midX,
       chip,
       labelX: Number.isFinite(labelX) ? labelX : midX,
-      labelY: from.y - LABEL.offset,
+      labelY: to.y - LABEL.offset,
       labelWidth: chip?.width || 0,
       labelHeight: chip?.height || 0,
     }
@@ -258,17 +254,37 @@ export function buildGraphLayout(graph = {}) {
   for (const edge of laidOutEdges) {
     if (!edge.chip) continue
     const candidate = { labelX: edge.labelX, labelY: edge.labelY, labelWidth: edge.labelWidth, labelHeight: edge.labelHeight }
-    let level = 0
-    while (level < 6 && placedChips.some(other => chipsOverlap(candidate, other))) {
-      level += 1
-      candidate.labelY = edge.labelY - level * (edge.labelHeight + LABEL.gap)
+    // A fixed six-step cap silently reintroduced overlaps in dense graphs. Jump
+    // above the conflicting chip each time; the finite placed list bounds this.
+    let collision = placedChips.find(other => chipsOverlap(candidate, other))
+    while (collision) {
+      candidate.labelY = collision.labelY - (candidate.labelHeight + collision.labelHeight) / 2 - LABEL.gap
+      collision = placedChips.find(other => chipsOverlap(candidate, other))
     }
     edge.labelY = candidate.labelY
     placedChips.push(candidate)
   }
 
-  const width = Math.max(640, ...[...columnX.values()].map(x => x + Math.max(...nodes.map(node => boxes[node.id].width)) / 2 + 24))
-  const height = Math.max(240, ...Object.values(positions).map(position => position.y + NODE.height))
+  // Lifted chips can extend above row zero. Translate ALL geometry together so
+  // the browser's real viewBox cannot crop labels after collision avoidance.
+  const margin = 16
+  const minX = Math.min(...nodes.map(node => positions[node.id].x - boxes[node.id].width / 2),
+    ...placedChips.map(chip => chip.labelX - chip.labelWidth / 2))
+  const minY = Math.min(...nodes.map(node => positions[node.id].y - boxes[node.id].height / 2),
+    ...placedChips.map(chip => chip.labelY - chip.labelHeight / 2))
+  const shiftX = Math.max(0, margin - minX)
+  const shiftY = Math.max(0, margin - minY)
+  for (const position of Object.values(positions)) { position.x += shiftX; position.y += shiftY }
+  for (const edge of laidOutEdges) {
+    edge.startX += shiftX; edge.endX += shiftX; edge.midX += shiftX; edge.labelX += shiftX
+    edge.startY += shiftY; edge.endY += shiftY; edge.labelY += shiftY
+  }
+  const width = Math.max(640,
+    ...nodes.map(node => positions[node.id].x + boxes[node.id].width / 2 + margin),
+    ...laidOutEdges.map(edge => Math.max(edge.midX, edge.labelX + edge.labelWidth / 2) + margin))
+  const height = Math.max(240,
+    ...nodes.map(node => positions[node.id].y + boxes[node.id].height / 2 + margin),
+    ...laidOutEdges.map(edge => edge.labelY + edge.labelHeight / 2 + margin))
   return { positions, boxes, edges: laidOutEdges, width, height }
 }
 

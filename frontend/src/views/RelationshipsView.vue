@@ -55,20 +55,7 @@
       <el-card shadow="never" class="mt-16">
         <template #header>原文关系图 · 点击关系线查看证据</template>
         <el-alert v-if="result.graph.truncated" title="关系图已按100节点/200边截取；完整结果请用表格分页查看。" type="warning" :closable="false" />
-        <div class="graph-scroll"><svg v-if="nodes.length" :viewBox="`0 0 ${layout.width} ${layout.height}`" :style="{ width: layout.width + 'px', height: layout.height + 'px' }" role="img" aria-label="已验证关系图">
-          <path v-for="edge in layout.edges" :key="'w'+edge.id" :d="pathOf(edge)" class="edge-hit" @click="openEvidence(edge.evidence_ids)" />
-          <g v-for="edge in layout.edges" :key="edge.id" tabindex="0" role="button" :aria-label="edgeLabels(edge.kind)" @click="openEvidence(edge.evidence_ids)" @keydown.enter="openEvidence(edge.evidence_ids)">
-            <path :d="pathOf(edge)" class="edge-line" />
-            <circle :cx="edge.endX" :cy="edge.endY" r="3.2" class="edge-tip" />
-            <template v-if="edge.chip">
-              <rect :x="edge.labelX - edge.chip.width/2" :y="edge.startY - 13 - edge.chip.height/2" :width="edge.chip.width" :height="edge.chip.height" :rx="edge.chip.height/2" class="edge-chip" />
-              <text :x="edge.labelX" :y="edge.startY - 13 + 4" text-anchor="middle" class="edge-label">{{ edge.kindLabel }}</text>
-            </template>
-          </g>
-          <g v-for="node in nodes" :key="node.id" :transform="`translate(${layout.positions[node.id].x},${layout.positions[node.id].y})`" tabindex="0" role="button" @click="openEvidence(node.evidence_ids)" @keydown.enter="openEvidence(node.evidence_ids)">
-            <rect :x="-layout.boxes[node.id].width/2" y="-20" :width="layout.boxes[node.id].width" height="40" rx="9" :fill="colors[node.kind]" stroke="#c3cedd" /><text text-anchor="middle" y="4.5" class="node-label">{{ node.label }}</text><title>{{ node.label }}；{{ node.identity_status }}</title>
-          </g>
-        </svg><el-empty v-else description="没有可显示的已验证关系" /></div>
+        <RelationshipGraph :graph="result.graph" @evidence="openEvidence" />
       </el-card>
     </template>
     <el-drawer v-model="drawer" title="原文证据（与查询固定同一版本）" size="55%">
@@ -82,10 +69,10 @@
 import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 import { useDataset } from '../services/useDataset'
 import { createRenderMeasurement } from '../services/renderMeasurement'
-import { buildGraphLayout, coalesceGraph, edgePath } from '../services/graphLayout'
+import RelationshipGraph from '../components/RelationshipGraph.vue'
 const {datasetId,context}=useDataset()
 const root=ref(null),lastSample=ref(null)
-const meter=createRenderMeasurement({nextTick,nextFrame:()=>new Promise(resolve=>requestAnimationFrame(resolve)),isReady:()=>Boolean(root.value?.querySelector('.el-table') && root.value?.querySelector('.el-pagination') && root.value?.querySelector('.graph-scroll') && (!nodes.value.length || root.value.querySelector('.graph-scroll svg')))})
+const meter=createRenderMeasurement({nextTick,nextFrame:()=>new Promise(resolve=>requestAnimationFrame(resolve)),isReady:()=>Boolean(root.value?.querySelector('.el-table') && root.value?.querySelector('.el-pagination') && root.value?.querySelector('.graph-scroll') && (!result.value?.graph.nodes.length || root.value.querySelector('.graph-scroll svg')))})
 let resultScope='official',evidenceScope='official'
 import { ElMessage } from 'element-plus'
 import { task2Status, organizationChoices, relationshipQuery, sourceEvidence } from '../api/task2'
@@ -111,17 +98,10 @@ let evidenceGeneration=0,evidenceVersion=''
 function rowEvidence(row){const ids=new Set(row.evidence_ids||[]);Object.values(row.by_supplier||{}).forEach(x=>(x.evidence_ids||[]).forEach(id=>ids.add(id)));openEvidence([...ids])}
 function openEvidence(ids){if(!ids?.length){ElMessage.info('这条记录没有可显示的证据');return}evidenceVersion=result.value.dataset_id;evidenceScope=resultScope;evidenceIds.value=ids;selectedEvidence.value=ids[0];drawer.value=true;readEvidence()}
 async function readEvidence(){const token=++evidenceGeneration,ticket=context.ticket();evidence.value=null;evidenceLoading.value=true;try{const value=await sourceEvidence(selectedEvidence.value,evidenceVersion,evidenceScope);if(token===evidenceGeneration && context.accept(ticket))evidence.value=value}catch(e){if(token===evidenceGeneration && context.accept(ticket))ElMessage.error(e.message)}finally{if(token===evidenceGeneration && context.accept(ticket))evidenceLoading.value=false}}
-const coalesced=computed(()=>coalesceGraph({nodes:result.value?.graph.nodes||[],edges:result.value?.graph.edges||[]}))
-const nodes=computed(()=>coalesced.value.nodes)
-const colors={project:'#d9eafa',event:'#dff2e6',bid_subject:'#ffebcc',organization:'#e9e1f4'}
-const edgeLabels=k=>({procured_by:'采购单位',package_of:'所属项目',individual_subject:'法人主体',consortium_member:'联合体成员',awarded_to:'中标',product_supplier:'明示产品供应商',award_only_won:'仅中标证据',bid_participation_won:'竞标·中标',bid_participation_lost:'竞标·未中标',bid_participation_unknown:'竞标·结果未知'}[k]||k)
-const kindLabels=Object.fromEntries(Object.keys({procured_by:1,package_of:1,individual_subject:1,consortium_member:1,awarded_to:1,product_supplier:1,award_only_won:1,bid_participation_won:1,bid_participation_lost:1,bid_participation_unknown:1}).map(k=>[k,edgeLabels(k)]))
-const layout=computed(()=>buildGraphLayout({nodes:coalesced.value.nodes,edges:coalesced.value.edges,kindLabels}))
-const pathOf=edge=>edgePath(edge)
 watch(datasetId,async id=>{context.select(id);meter.cancel(generation);generation++;choiceGeneration++;evidenceGeneration++;result.value=null;status.value=null;choices.value=[];selector.value='';selectors.value=[];drawer.value=false;evidence.value=null;evidenceIds.value=[];selectedEvidence.value='';lastSample.value=null;page.value=1;secondaryPage.value=1;error.value='';loading.value=true;const ticket=context.ticket();try{const value=await task2Status(id);if(!context.accept(ticket))return;status.value=value;await loadChoices('')}catch(e){if(context.accept(ticket))error.value=e.message}finally{if(context.accept(ticket))loading.value=false}},{immediate:true})
 onUnmounted(()=>{meter.cancel(generation);generation++;choiceGeneration++;evidenceGeneration++})
 </script>
 
 <style scoped>
-.mt-16{margin-top:16px}.version{float:right}.version-text{font-size:12px;color:#667085;overflow-wrap:anywhere}.query-form{display:flex;gap:12px;flex-wrap:wrap}.actor{width:min(100%,560px)}.scope{width:185px}.explanation{color:#526078;font-size:14px;line-height:1.7}.graph-scroll{overflow:auto;max-height:680px;border:1px solid #e3e8f0;border-radius:10px;background:linear-gradient(180deg,#fbfcfe,#f6f8fc)}.graph-scroll svg{display:block}.graph-scroll g[role=button]{cursor:pointer}.graph-scroll g[role=button]:focus{outline:2px solid #2879ce;outline-offset:2px}.graph-scroll g[role=button]:hover .edge-line{stroke:#2879ce}.edge-line{fill:none;stroke:#98a9c0;stroke-width:1.6}.edge-tip{fill:#98a9c0}.edge-hit{fill:none;stroke:transparent;stroke-width:14}.edge-chip{fill:#fff;stroke:#d6dee9}.edge-label{font-size:11px;fill:#4a5a72;pointer-events:none}.node-label{font-size:12px;fill:#22304a}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f5f7fa;padding:16px;line-height:1.8}code{overflow-wrap:anywhere}
+.mt-16{margin-top:16px}.version{float:right}.version-text{font-size:12px;color:#667085;overflow-wrap:anywhere}.query-form{display:flex;gap:12px;flex-wrap:wrap}.actor{width:min(100%,560px)}.scope{width:185px}.explanation{color:#526078;font-size:14px;line-height:1.7}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f5f7fa;padding:16px;line-height:1.8}code{overflow-wrap:anywhere}
 </style>

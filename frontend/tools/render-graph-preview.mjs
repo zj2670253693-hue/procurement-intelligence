@@ -4,11 +4,7 @@
  */
 import { writeFileSync } from 'node:fs'
 import { buildGraphLayout, edgePath, NODE } from '../src/services/graphLayout.js'
-
-const KIND_LABELS = {
-  package_of: '所属项目', awarded_to: '中标', bid_participation_unknown: '竞标·结果未知',
-  individual_subject: '法人主体', bid_participation_won: '竞标·中标', procured_by: '采购单位',
-}
+import { RELATION_LABELS as KIND_LABELS } from '../src/services/graphLabels.js'
 const COLORS = { project: '#d9eafa', event: '#dff2e6', bid_subject: '#ffebcc', organization: '#e9e1f4' }
 
 // The exact shape from the screenshot the user reported, plus the extra edges the
@@ -68,8 +64,8 @@ for (const edge of layout.edges) {
   parts.push(`<path d="${edgePath(edge)}" fill="none" stroke="#98a9c0" stroke-width="1.6"/>`)
   parts.push(`<circle cx="${edge.endX}" cy="${edge.endY}" r="3.2" fill="#98a9c0"/>`)
   if (edge.chip) {
-    parts.push(`<rect x="${edge.labelX - edge.chip.width / 2}" y="${edge.startY - 13 - edge.chip.height / 2}" width="${edge.chip.width}" height="${edge.chip.height}" rx="${edge.chip.height / 2}" fill="#fff" stroke="#d6dee9"/>`)
-    parts.push(`<text x="${edge.labelX}" y="${edge.startY - 13 + 4}" text-anchor="middle" font-size="11" fill="#4a5a72">${escape(edge.kindLabel)}</text>`)
+    parts.push(`<rect x="${edge.labelX - edge.chip.width / 2}" y="${edge.labelY - edge.chip.height / 2}" width="${edge.chip.width}" height="${edge.chip.height}" rx="${edge.chip.height / 2}" fill="#fff" stroke="#d6dee9"/>`)
+    parts.push(`<text x="${edge.labelX}" y="${edge.labelY + 4}" text-anchor="middle" font-size="11" fill="#4a5a72">${escape(edge.kindLabel)}</text>`)
   }
 }
 for (const node of graph.nodes) {

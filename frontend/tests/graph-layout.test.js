@@ -107,20 +107,20 @@ test('a backwards edge is routed beside the nodes instead of through them', () =
   assert.ok(edge.midX < width, 'and does not run off the canvas')
 })
 
-test('edge labels are placed off the line and deduplicated per source label', () => {
+test('every relation has its own label placed off the line', () => {
   const { edges } = layout()
   const labels = edges.filter(edge => edge.chip)
-  // One chip per (source, kind): p has two package edges but only one label.
+  // Distinct fact IDs are distinct relations, even when source/kind match.
   assert.deepEqual(labels.map(edge => edge.kindLabel).sort(),
-    ['所属项目', '中标', '竞标·结果未知', '法人主体', '法人主体'].sort())
+    ['所属项目', '所属项目', '中标', '中标', '竞标·结果未知', '竞标·结果未知', '法人主体', '法人主体'].sort())
   for (const edge of labels) {
     // The chip hangs beside the vertical run, offset off the line itself.
-    assert.ok(edge.labelY < edge.startY && edge.startY - edge.labelY >= 10, 'chip sits above the line')
+    assert.ok(edge.labelY < edge.endY && edge.endY - edge.labelY >= 10, 'chip sits above the target segment')
     assert.ok(edge.labelX - edge.labelWidth / 2 >= edge.startX - 1, 'chip does not cover the source node')
     assert.ok(edge.labelX + edge.labelWidth / 2 <= edge.endX, 'chip is never clipped by the target box')
     assert.ok(edge.labelX - edge.labelWidth / 2 > edge.midX, 'chip sits to the right of its vertical run')
     assert.ok(edge.midX > edge.startX && edge.midX < edge.endX, 'the run stays inside the gutter')
-    assert.ok(edge.labelY < edge.startY, 'label is offset off the line, not on it')
+    assert.ok(edge.labelY < edge.endY, 'label is offset off the target segment, not on it')
     assert.ok(edge.labelWidth > 0 && edge.labelHeight > 0, 'label has a measurable box for its backdrop')
     assert.ok(edge.chip && edge.chip.width === edge.labelWidth, 'chip and label agree')
   }
@@ -133,7 +133,28 @@ test('edge labels are placed off the line and deduplicated per source label', ()
   assert.ok(multi.length >= 2, 'the fixture really does contain shared labels')
   for (const [key] of multi) {
     const shown = edges.filter(edge => `${edge.from}|${edge.kind}` === key && edge.chip).length
-    assert.equal(shown, 1, `${key} should be labelled once, saw ${shown}`)
+    assert.equal(shown, groups[key], `${key} must label every separate fact, saw ${shown}`)
+  }
+})
+
+test('dense incoming relations have visible nonoverlapping labels inside the canvas', () => {
+  const graph = {
+    nodes: [{id:'source',kind:'event',label:'合同包1'}, {id:'target',kind:'bid_subject',label:'某公司'}],
+    edges: Array.from({length: 16}, (_, index) => ({id:'fact-'+index,from:'source',to:'target',
+      kind:index % 2 ? 'package_of' : 'bid_participation_unknown'})),
+  }
+  const value = layout(graph)
+  const chips = value.edges.filter(edge => edge.chip)
+  assert.equal(chips.length, graph.edges.length)
+  for (const chip of chips) {
+    assert.ok(chip.labelY - chip.labelHeight / 2 >= 0, 'top chip must not be clipped')
+    assert.ok(chip.labelY + chip.labelHeight / 2 <= value.height, 'bottom chip is inside the canvas')
+    for (const other of chips) {
+      if (chip.id >= other.id) continue
+      const horizontal = Math.abs(chip.labelX - other.labelX) < (chip.labelWidth + other.labelWidth) / 2
+      const vertical = Math.abs(chip.labelY - other.labelY) < (chip.labelHeight + other.labelHeight) / 2
+      assert.ok(!(horizontal && vertical), chip.id + ' overlaps ' + other.id)
+    }
   }
 })
 

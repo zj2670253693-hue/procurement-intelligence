@@ -7,13 +7,7 @@
  */
 import { readFileSync } from 'node:fs'
 import { buildGraphLayout, coalesceGraph } from '../src/services/graphLayout.js'
-
-const KIND_LABELS = {
-  procured_by: '采购单位', package_of: '所属项目', individual_subject: '法人主体',
-  consortium_member: '联合体成员', awarded_to: '中标', product_supplier: '明示产品供应商',
-  award_only_won: '仅中标证据', bid_participation_won: '竞标·中标',
-  bid_participation_lost: '竞标·未中标', bid_participation_unknown: '竞标·结果未知',
-}
+import { RELATION_LABELS as KIND_LABELS } from '../src/services/graphLabels.js'
 
 const payload = JSON.parse(readFileSync(process.argv[2], 'utf8'))
 const withGraph = payload.samples.filter(entry => entry.graph)
