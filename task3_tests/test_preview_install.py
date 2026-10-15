@@ -109,6 +109,34 @@ def test_preview_environment_keeps_credentials_strips_model_keys_and_forces_isol
         runtime_root='/srv/procurement-app/shared/runtime/task3-preview',public_origin='http://47.237.97.246',official_database=OFFICIAL)
 
 
+def test_https_locations_always_forward_the_scheme_header():
+    """Without X-Forwarded-Proto a valid HTTPS session is rejected with 403."""
+    module=load('install_preview')
+    result=module.retarget_https_server(HTTPS_BLOCK+HTTP_BLOCK,RELEASE,18080)
+    https=result[:result.index('listen 80 default_server;')]
+    for location in ('location /api/', 'location = /docs'):
+        block=https[https.index(location):]
+        block=block[:block.index('}')]
+        assert 'proxy_set_header X-Forwarded-Proto $scheme;' in block, location
+    assert 'X-Forwarded-Proto' not in result[result.index('listen 80 default_server;'):]
+    doubled=HTTPS_BLOCK.replace('proxy_pass http://127.0.0.1:8000;\n','proxy_pass http://127.0.0.1:8000;\n')
+    output=module.retarget_https_server(doubled+HTTP_BLOCK,RELEASE,18080)
+    api=output[output.index('location /api/'):]
+    api=api[:api.index('}')]
+    assert api.count('X-Forwarded-Proto')==1, api
+
+
+def test_claim_ignores_a_lock_whose_task_is_gone(temp_connection=None):
+    """A deleted or finished task must never block the queue forever."""
+    source=(Path(__file__).resolve().parents[1]/'task3_platform/job_store.py').read_text(encoding='utf-8')
+    claim=source[source.index('def claim('):source.index('def heartbeat(')]
+    assert 'active_task_id=NULL' in claim
+    assert "holder is not None and holder[\"status\"] in (\"running\", \"validating\")" in claim
+    recovery=source[source.index('def recover_expired('):]
+    assert 'active_task_id=NULL' in recovery
+    assert 'holder is None' in recovery
+
+
 def test_prepared_release_is_traversable_by_the_web_server():
     """A 750 release root made nginx return 500 on static assets while the API worked."""
     module=load('prepare_preview')

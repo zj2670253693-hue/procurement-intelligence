@@ -190,8 +190,16 @@ class JobStore:
         try:
             with transaction(self.connection) as cursor:
                 runtime = self._runtime(cursor)
-                if runtime["active_task_id"]:
-                    return None
+                active = runtime["active_task_id"]
+                if active:
+                    # A lock naming a task that no longer exists (or already finished)
+                    # would otherwise block every queued job forever.
+                    cursor.execute("SELECT status FROM t3_jobs WHERE task_id=%s", (active,))
+                    holder = cursor.fetchone()
+                    if holder is not None and holder["status"] in ("running", "validating"):
+                        return None
+                    cursor.execute("UPDATE t3_runtime_state SET active_task_id=NULL WHERE singleton_id=1 AND active_task_id=%s", (active,))
+                    runtime = self._runtime(cursor)
                 cursor.execute("SELECT COUNT(*) AS n FROM t3_inference_attempts WHERE state IN ('sent','uncertain')")
                 uncertainty_gate = " AND mode='parse_only'" if cursor.fetchone()["n"] else ""
                 cursor.execute("SELECT * FROM t3_jobs WHERE status='queued' AND cancel_requested=FALSE" + uncertainty_gate + " ORDER BY accepted_at,task_id LIMIT 1 FOR UPDATE")
@@ -296,7 +304,13 @@ class JobStore:
     def recover_expired(self):
         recovered = []
         with transaction(self.connection) as cursor:
-            self._runtime(cursor)
+            runtime = self._runtime(cursor)
+            active = runtime["active_task_id"]
+            if active:
+                cursor.execute("SELECT status FROM t3_jobs WHERE task_id=%s", (active,))
+                holder = cursor.fetchone()
+                if holder is None or holder["status"] not in ("running", "validating"):
+                    cursor.execute("UPDATE t3_runtime_state SET active_task_id=NULL WHERE singleton_id=1 AND active_task_id=%s", (active,))
             cursor.execute("SELECT * FROM t3_jobs WHERE status IN ('running','validating') AND lease_until<=%s FOR UPDATE", (_sql_time(self.clock()),))
             for row in cursor.fetchall():
                 cursor.execute("SELECT COUNT(*) AS n FROM t3_inference_attempts WHERE task_id=%s AND state IN ('sent','uncertain')", (row["task_id"],))

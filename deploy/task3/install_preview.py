@@ -238,20 +238,24 @@ def retarget_https_server(text,release,port):
         lambda m:m.group(1)+'root '+release+'/frontend-dist;',block)
     if roots!=1:fail('unexpected_current_frontend_root')
     if 'localhost' in root:fail('endpoint_rewrite_required')
-    # Exactly one endpoint directive per location: a duplicated line (even an
-    # identical adjacent one) would silently double the upstream and must fail closed.
-    lines=root.split('\n');rewritten=0;output=[];inside=False;served=False
+    if 'X-Forwarded-Proto' not in root:fail('forwarded_proto_required')
+    # The app only trusts the client address when the proxy is explicit, and the
+    # session route requires a secure transport; without this header a valid cookie
+    # over HTTPS is rejected with 403.
+    lines=root.split('\n');rewritten=0;output=[];inside=False;served=False;forwarded=False;location=None
     for line in lines:
         stripped=line.strip()
         if stripped.startswith('location'):
-            inside=True;served=False
+            inside=True;served=False;forwarded=False
+            location=stripped
         elif stripped=='}':
+            if inside and not forwarded:
+                output.append('        proxy_set_header X-Forwarded-Proto $scheme;')
             inside=False
-        # Preserve the original separator and any downstream path exactly:
-        # `http://127.0.0.1:8000;` stays `;`, `.../docs;` must become `:port/docs;`,
-        # never `:port;/docs;` or `:port;;`.
         match=re.fullmatch(r'(\s*)proxy_pass\s+http://127\.0\.0\.1:8000(?=[/;\s]|$)(.*)',line)
         if not match:
+            if inside and stripped.startswith('proxy_set_header') and 'X-Forwarded-Proto' in stripped:
+                forwarded=True
             output.append(line);continue
         if inside and served:fail('duplicate_https_proxy_endpoint')
         if inside:served=True
