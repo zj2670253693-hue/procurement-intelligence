@@ -2,9 +2,13 @@
 
 ## 当前状态（2026-10-15）
 
-任务一、二线上版本不变。此分支已实现上传、账号、持久队列、实体/关系数据集隔离、筛选、来源与导出、前端交互；已进行本地合成测试与真实浏览器渲染检查。
+任务一、二正式 `current` 与冻结库保持不变。任务三已安装为独立 HTTPS 预览（独立 API、单 worker、专用 MySQL），公网证书信任验证通过，自动续期 dry-run 及定时器已配置。预览可用不等于全部验收通过。
 
-**尚不是已验收的云端发布版本。** 真实隔离 MySQL 边界探针已通过（同名隔离、精确小数、领取/租约/回滚/owner，旧九表指纹不变）；这不是完整平台闭环验收。还需公网 HTTPS、三用户同时查询加后台处理、Ubuntu cgroup 总内存、真实模型小样本。生产API/worker已接入同一服务端配置工厂，但实际付费默认关闭；旧 `PAID_INFERENCE_ENABLED` 不能绕过。当前 `finalize_release()` 仅校验操作员报告结构，返回 `applied=false`，没有可执行的特权切换路径。不得将合成数据报告改名后充当真实验收报告。
+真实 MySQL 边界测试通过；三独立 reviewer 经真实 HTTPS 登录、同时查询官方数据并后台只解析30篇合成公告的检查通过，五类查询首轮/重复轮共30次完整渲染均值约0.57–0.74秒。续传、刷新、越权拒绝、导出及取消重试通过。该区间 API 总 cgroup 峰值507039744字节；worker区间采样峰值134168576字节、生命周期峰值143065088字节，两者不混称区间精确峰值；系统 available 最低1250131968字节，swap和OOM增量均为0。旧九表指纹及 current 前后不变，新增真实模型调用0。
+
+此前预览账本已有14次响应，包含两批各3篇合成公告的真实模型抽取和一批预算拦截；它们不是本轮新增调用，也不证明真实比赛样本准确率或计数器在所有输入上均有效。另以显式合成 transport 在真实 MySQL 完整跑通三个独立 owner 的实体、关系、三表流程；合成 transport 与真实供应商调用严格区分。
+
+**尚未全部验收。** 此轮实测发现预览缺少旧 `sample_data` 目录，官方原文/附件入口404。修复改为校验冻结HTML副本，并通过管理员明确配置的 `TASK3_OFFICIAL_SOURCE_ROOT` 读取已有物理共享目录（不跟随旧发布中的ZIP软链接、不复制3+GiB、不改旧DB）。须安装修复后从公网重新核对原文SHA及附件下载，并完成自有上传数据集的并发、异常和最终发布检查。`finalize_release()` 仍只校验报告、不执行正式 current 切换；不能把部分报告改名充当全部验收。
 
 ## 数据与权限边界
 
@@ -72,9 +76,9 @@ python -B -m pytest task3_tests/test_mysql_integration.py -m mysql_integration -
 
 此脚本不是完整并发/安全验收：仍须三独立账号同时使用，加后台真实处理，核对越权、数据集切换、刷新续传、取消/重试、部分失败、原文脚本不执行、附件与三表下载；记录每场景均值小于5秒、API/worker cgroup peak、system available minimum、swap、OOM事件、冷/热与并发时间段。任何缺项不得放行。
 
-## 模型与费用（当前关闭）
+## 模型与费用
 
-真实抽取必须另行取得小样本授权，明确 owner/provider/model、最多3篇、最多8次请求及有限输入/输出 token 预算。64000/32768 只是计划示例，不是授权。生产接线已有，但必须另行提供并核实与准确模型版本一致的 token 上界 counter/profile；不能把任意字节估计标记 verified，不能只打开旧环境开关就调用。
+代码和安装工具默认关闭付费；实际预览可能已有操作员配置的有限授权，以服务器策略与账本为准，不能仅凭页面勾选框推定本人的权限。新增真实抽取必须明确 owner/provider/model、最多3篇、最多8次请求及有限输入/输出 token 预算。64000/32768只是计划示例，不是自动费用授权。必须核实与准确模型版本一致的 token 上界 counter/profile；不能把任意字节估计标记 verified，不能只打开旧环境开关就调用。
 
 服务端需同时设置 `TASK3_PAID_ENABLED=1` 和 `TASK3_INFERENCE_PROFILE=<私有绝对路径>`。策略结构见 `deploy/task3/inference-profile.example.json`（示例approved=false，不可直接启用）。策略包含明确owner、provider/model/HTTPS base URL、有限总预算、生成参数、counter代码及验证记录哈希。密钥仅来自服务器对应环境变量，不放策略/请求/浏览器。
 
@@ -83,6 +87,8 @@ python -B -m pytest task3_tests/test_mysql_integration.py -m mysql_integration -
 API准入和worker每次发送前重新核对开关/策略身份；撤销、文件漂移、预算不足、counter验证失败均停止，不自动降级到旧客户端。计数器插件属于受信任的管理员代码，不接受网页上传替换；没有已核实插件时保留关闭。发布后更改策略/模型/生成或解析配置会改变processing指纹；worker需重启载入新配置，不能复用旧任务冒充新结果。API密钥轮换本身不是算法身份，但应安全重启worker以切换持有的客户端。
 
 SDK 自动重试为0；每次请求先持久 reserve/sent，usage 不明保持 null/uncertain 并阻止自动重发。离线关系构建 model_calls=0 与上游抽取费用分列。
+
+预算停止使用稳定码 `inference_budget_exhausted`，独立 `details` 保存允许预算、再调用所需累计预留、下一请求上界、供应商报告的已发送用量。未知实际用量保持null，不能用保守预留数字冒充账单；transport重复访问不重发，worker持久化诊断。旧任务没有详细诊断时页面明确提示缺失，不补造0。仅解析页面按实时服务端开关说明，不再写死“付费已关闭”；不会自动将仅解析批次转为付费任务。
 
 ## 隔离预览安装（显式管理员操作）
 
@@ -107,6 +113,8 @@ sudo /srv/procurement-app/shared/venv/bin/python -B deploy/task3/install_preview
 安装完成后仍需：真实迁移与三个平台账号、三用户并发加后台处理、cgroup 峰值、五分钟内五场景冷/热渲染、另行授权的有限模型样本。报告中的 `task3_deployed` 只表示预览服务已安装，**不代表**完整验收或正式切换。
 
 ## 发布及回滚前不可省略
+
+对已经安装的独立预览，可用 `update_preview.py --apply --plan <私有计划JSON> --plan-sha256 <已核对SHA>` 进行**预览更新**。仅root在预期主机执行，验证新旧release全部声明文件、两个unit/env/Nginx的预期SHA、共享原文SHA及无活动任务/不确定请求；在私有目录备份后只替换预览unit的WorkingDirectory、HTTPS静态root，并添加只读原文根。付费策略、密钥、预算、旧HTTP、旧env/current/DB均不变。真实九表指纹前后核对；失败尝试恢复全部配置并检查服务，明确报告回滚不完整，不删任何发布或数据。此工具不代表正式发布验收，管理员运行后仍需真实浏览器复验。
 
 
 所有实际验收与全分支独立审查修复完成后，才制作管理员切换脚本：冻结新包清单和各文件哈希；对旧任务一五表及任务二事实/证据/版本做完整前后指纹；保留旧 env、旧 release、旧 runtime、旧数据库；原子替换新环境和 current 链接。新环境保留旧 DB_NAME/TASK2_DATASET_ID，只新增 TASK3_* 配置，付费默认关闭。

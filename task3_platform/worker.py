@@ -148,7 +148,10 @@ class ProcessingWorker:
             status = "needs_confirmation" if isinstance(error, InferenceHalt) and error.code == "inference_needs_confirmation" else (
                      "cancelled" if error.code == "task_cancel_requested" else "failed")
             try:
-                self._diagnostics(lease, diagnostics + [{"code": error.code}])
+                diagnostic = {"code": error.code}
+                if isinstance(error, InferenceHalt) and error.code == "inference_budget_exhausted" and error.details is not None:
+                    diagnostic["details"] = error.details
+                self._diagnostics(lease, diagnostics + [diagnostic])
                 self.jobs.transition(lease, status, self._row(job.task_id)["phase"])
             except PlatformError:
                 self.jobs.recover_expired()

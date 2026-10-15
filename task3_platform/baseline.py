@@ -9,11 +9,17 @@ from pathlib import Path
 
 
 class BaselineAdapter:
-    def __init__(self, repo, assets):
+    def __init__(self, repo, assets, *, source_root=None):
         manager = getattr(repo, "db", None)
         self.connection = manager._conn if hasattr(manager, "_conn") else repo
         self.assets = assets
         self.repo=repo if hasattr(repo,"announcements") else None
+        self.source_root = None
+        if source_root is not None:
+            root = Path(source_root)
+            if not root.is_absolute() or root == Path(root.anchor) or ".." in root.parts:
+                raise PlatformError("unsafe_official_source_root")
+            self.source_root = reject_link_ancestors(root)
 
     def search(self, actor, dataset_id, filters, page=1, page_size=20):
         offset = page_window(page, page_size)
@@ -44,7 +50,12 @@ class BaselineAdapter:
         from api.routers.task1 import _resolve_source
         ann=self.repo.announcements.get(aid)
         if not ann: raise PlatformError("announcement_not_found",404)
-        path=_resolve_source(ann.get("file_path") or "")
+        # A preview contains hash-pinned frozen HTML, but not the old sample_data
+        # directory. DB-relative legacy paths must not hide the available copy.
+        candidates = [Path(self.assets)/"task2-sources"/(aid+".html")]
+        if self.source_root is not None: candidates.append(self.source_root/(aid+".html"))
+        path = next((reject_link_ancestors(candidate) for candidate in candidates if candidate.is_file()), None)
+        if path is None: path=_resolve_source(ann.get("file_path") or "")
         if path is None: raise PlatformError("official_source_unavailable",404)
         path=reject_link_ancestors(path)
         relation=self._version()
@@ -53,15 +64,37 @@ class BaselineAdapter:
         if not expected or _hash_file(path)!=expected["sha256"]: raise PlatformError("official_source_integrity",409)
         return path
 
+    def _archive_for_source(self, aid, source):
+        roots = [source.parent]
+        if self.source_root is not None:
+            root = reject_link_ancestors(self.source_root)
+            # Bind the shared originals to the same frozen HTML version. Do not
+            # follow the old release's per-file archive symlinks or copy 3+ GiB.
+            html = reject_link_ancestors(root/(aid+".html"))
+            if not html.is_file() or _hash_file(html) != _hash_file(source):
+                raise PlatformError("official_source_integrity",409)
+            roots.insert(0, root)
+        for root in roots:
+            archive = reject_link_ancestors(root/(aid+".zip"))
+            if archive.is_file(): return archive
+        return None
+
+    def archive_path(self, aid):
+        archive = self._archive_for_source(aid, self.source_path(aid))
+        if archive is None: raise PlatformError("attachment_not_available",404)
+        return archive
+
     def announcement(self,actor,dataset_id,aid):
         if dataset_id!="official": raise PlatformError("invalid_baseline_scope")
         path=self.source_path(aid)
         import zipfile
         attachments=[]
-        archive=path.with_suffix(".zip")
-        if archive.is_file():
-            reject_link_ancestors(archive)
-            with zipfile.ZipFile(archive) as source: attachments=[item.filename for item in source.infolist() if not item.is_dir()]
+        archive=self._archive_for_source(aid,path)
+        if archive is not None:
+            try:
+                with zipfile.ZipFile(archive) as source: attachments=[item.filename for item in source.infolist() if not item.is_dir()]
+            except zipfile.BadZipFile:
+                raise PlatformError("official_attachment_invalid",409) from None
         return {"upload_dataset_id":"official","announcement_id":aid,"html_text":path.read_bytes().decode("utf-8-sig"),"source_sha256":_hash_file(path),"attachments":attachments,"availability":"completed"}
 
     def attachments(self,aid):

@@ -170,3 +170,49 @@ def test_baseline_adapter_never_updates_existing_tables(platform_module, actor_a
     assert page.total == 1 and page.items[0]["product_name"] == "baseline"
     assert connection.db.total_changes == before
     connection.db.close()
+
+
+def test_official_source_uses_hash_verified_frozen_copy_not_missing_legacy_relative_path(platform_module, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    module = platform_module("baseline")
+    aid = "t20990101_1"
+    body = b"<p>synthetic frozen source</p>"
+    assets = tmp_path / "release_assets"
+    path = assets / "task2-sources" / (aid + ".html")
+    path.parent.mkdir(parents=True)
+    path.write_bytes(body)
+    repo = SimpleNamespace(announcements=SimpleNamespace(get=lambda value: {"file_path": "sample_data/" + value + ".html"}))
+    adapter = module.BaselineAdapter(repo, assets)
+    version = SimpleNamespace(resolve_version=lambda: "synthetic", metadata=lambda value: (
+        {"input_manifest": {"html": {aid: {"sha256": hashlib.sha256(body).hexdigest()}}}}, {}))
+    monkeypatch.setattr(adapter, "_version", lambda: version)
+    assert adapter.source_path(aid) == path
+    assert adapter.announcement(None, "official", aid)["source_sha256"] == hashlib.sha256(body).hexdigest()
+    path.write_bytes(b"changed")
+    with pytest.raises(module.PlatformError, match="official_source_integrity"):
+        adapter.source_path(aid)
+
+
+def test_official_archive_reuses_explicit_physical_root_without_copy_or_legacy_link(platform_module, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import zipfile
+    module = platform_module("baseline")
+    aid = "t20990101_1"
+    root = tmp_path / "shared-originals"
+    root.mkdir()
+    body = b"<p>synthetic source</p>"
+    (root / (aid + ".html")).write_bytes(body)
+    archive = root / (aid + ".zip")
+    with zipfile.ZipFile(archive, "w") as output:
+        output.writestr("synthetic.txt", "public synthetic attachment")
+    repo = SimpleNamespace(announcements=SimpleNamespace(get=lambda value: {"file_path": "missing-sample-data/" + value + ".html"}))
+    adapter = module.BaselineAdapter(repo, tmp_path / "assets", source_root=root)
+    version = SimpleNamespace(resolve_version=lambda: "synthetic", metadata=lambda value: (
+        {"input_manifest": {"html": {aid: {"sha256": hashlib.sha256(body).hexdigest()}}}}, {}))
+    monkeypatch.setattr(adapter, "_version", lambda: version)
+    assert adapter.source_path(aid) == root / (aid + ".html")
+    assert adapter.archive_path(aid) == archive
+    assert adapter.announcement(None, "official", aid)["attachments"] == ["synthetic.txt"]
+    assert adapter.archive_path(aid).stat().st_size == archive.stat().st_size
+    with pytest.raises(module.PlatformError, match="unsafe_official_source_root"):
+        module.BaselineAdapter(repo, tmp_path / "assets", source_root="relative/root")

@@ -82,7 +82,7 @@ class LedgerTransport:
     def __call__(self, request):
         with self._lock:
             if self._halted:
-                raise InferenceHalt(self._halted)
+                raise InferenceHalt(self._halted.code, details=self._halted.details)
             attempt, sent = None, False
             try:
                 self.policy.authorize(self.store.job_row(), request)
@@ -108,6 +108,7 @@ class LedgerTransport:
                 self.store.record_response(attempt.attempt_id, response)
                 return response
             except BaseException as exc:
+                details = None
                 if sent and attempt:
                     try:
                         self.store.mark_uncertain(attempt.attempt_id, "transport_or_persistence_uncertain")
@@ -116,10 +117,12 @@ class LedgerTransport:
                     code = "inference_needs_confirmation"
                 elif isinstance(exc, (InferenceHalt, PlatformError)):
                     code = exc.code
+                    if isinstance(exc, InferenceHalt) and code == "inference_budget_exhausted":
+                        details = exc.details
                 else:
                     code = "inference_ledger_unavailable"
-                self._halted = code
-                raise InferenceHalt(code) from None
+                self._halted = InferenceHalt(code, details=details)
+                raise self._halted from None
 
 
 class OpenAIBackend:

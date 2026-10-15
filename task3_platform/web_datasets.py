@@ -104,7 +104,7 @@ def router(provider):
         actor=services.actor(request,guest=True)
         info=source(services,actor,dataset_id,aid)
         if not info.get("attachments"): raise PlatformError("attachment_not_available",404)
-        if dataset_id=="official": path=services.baseline.source_path(aid).with_suffix(".zip")
+        if dataset_id=="official": path=services.baseline.archive_path(aid)
         else:
             dataset=services.datasets.dataset(actor,dataset_id)
             path=services.paths.task(dataset["task_id"]).inputs/(aid+".zip")

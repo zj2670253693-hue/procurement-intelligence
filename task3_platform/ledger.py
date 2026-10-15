@@ -55,10 +55,25 @@ class LedgerStore:
             if cursor.fetchone()["n"]:
                 raise InferenceHalt("inference_needs_confirmation")
             budget = strict_json_loads(job["spec_json"]).get("budget") or {}
-            if (job["used_calls"] + 1 > budget.get("max_calls", 0)
-                    or job["reserved_input_tokens"] + input_bound > budget.get("max_input_tokens", 0)
-                    or job["reserved_output_tokens"] + output_bound > budget.get("max_output_tokens", 0)):
-                raise InferenceHalt("inference_budget_exhausted")
+            needed_calls = job["used_calls"] + 1
+            needed_input = job["reserved_input_tokens"] + input_bound
+            needed_output = job["reserved_output_tokens"] + output_bound
+            if (needed_calls > budget.get("max_calls", 0)
+                    or needed_input > budget.get("max_input_tokens", 0)
+                    or needed_output > budget.get("max_output_tokens", 0)):
+                # Keep a stable code and separate conservative reservations from measured
+                # provider usage. Missing usage is unknown, not free. No request is sent.
+                usage = self.usage_summary()
+                raise InferenceHalt("inference_budget_exhausted", details={
+                    "budget": {key: budget.get(key, 0) for key in
+                               ("max_calls", "max_input_tokens", "max_output_tokens")},
+                    "required_total": {"calls": needed_calls, "input_tokens": needed_input,
+                                       "output_tokens": needed_output},
+                    "next_request_bound": {"input_tokens": input_bound, "output_tokens": output_bound},
+                    "observed_usage": {"sent_calls": usage["sent_calls"],
+                                       "input_tokens": usage["actual_input_tokens"],
+                                       "output_tokens": usage["actual_output_tokens"],
+                                       "usage_unknown": usage["usage_unknown"]}})
             attempt_id = secrets.token_hex(16)
             cursor.execute("INSERT INTO t3_inference_attempts(attempt_id,task_id,request_hash,announcement_id,epoch,state,request_json,"
                            "reserved_input_tokens,reserved_output_tokens,created_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",

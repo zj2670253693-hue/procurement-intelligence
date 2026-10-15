@@ -283,3 +283,29 @@ def test_budget_rejection_is_before_second_send(ledger_setup, platform_module):
     with pytest.raises(p.InferenceHalt):
         transport(replace(request, layer="extra"))
     assert backend.sent == 1
+
+
+@pytest.mark.parametrize("usage,observed", [
+    ({"input_tokens": 7, "output_tokens": 2}, {"sent_calls": 1, "input_tokens": 7, "output_tokens": 2, "usage_unknown": False}),
+    (None, {"sent_calls": 1, "input_tokens": None, "output_tokens": None, "usage_unknown": True}),
+])
+def test_budget_refusal_keeps_stable_code_separates_bounds_from_real_usage_and_never_resends(ledger_setup, platform_module, usage, observed):
+    p = inference_module()
+    c = platform_module("contracts")
+    backend = Backend(p.InferenceResponse('{"entities":[]}', usage, "synthetic-request", "synthetic-A"))
+    _, ledger, transport, _, request, connection = ledger_setup(budget=c.ModelBudget(1, 8, 64), backend=backend)
+    transport(request)
+    for _ in range(2):
+        with pytest.raises(p.InferenceHalt) as refused:
+            transport(replace(request, layer="extra"))
+        assert refused.value.code == "inference_budget_exhausted"
+        assert refused.value.details == {
+            "budget": {"max_calls": 1, "max_input_tokens": 8, "max_output_tokens": 64},
+            "required_total": {"calls": 2, "input_tokens": 16, "output_tokens": 128},
+            "next_request_bound": {"input_tokens": 8, "output_tokens": 64},
+            "observed_usage": observed}
+        assert "synthetic-request" not in str(refused.value.details)
+    assert backend.sent == 1
+    assert ledger.usage_summary()["sent_calls"] == 1
+    row = connection.db.execute("SELECT used_calls,reserved_input_tokens,reserved_output_tokens FROM t3_jobs WHERE task_id=?", (request.task_id,)).fetchone()
+    assert tuple(row) == (1, 8, 64)

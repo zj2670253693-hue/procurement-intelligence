@@ -5,8 +5,9 @@ import json
 
 
 class InferenceHalt(Exception):
-    def __init__(self, code):
+    def __init__(self, code, *, details=None):
         self.code = code
+        self.details = details
         super().__init__(code)
 
 

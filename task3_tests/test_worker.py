@@ -122,6 +122,20 @@ def test_extract_is_not_completed_before_finalization(worker_setup, clock):
     assert steps.saved_entities == 1
 
 
+def test_worker_persists_budget_details_without_claiming_completion(worker_setup, clock):
+    from models.inference import InferenceHalt
+    module, jobs, job, steps, _ = worker_setup("extract")
+    details = {"budget": {"max_calls": 1}, "observed_usage": {"input_tokens": None}}
+    def exhausted(*args):
+        raise InferenceHalt("inference_budget_exhausted", details=details)
+    steps.entity = exhausted
+    result = module.ProcessingWorker(jobs, steps, clock).run_once()
+    assert result.status == "failed" and steps.saved_entities == 0
+    with jobs.connection.cursor() as cursor:
+        row = jobs._row(cursor, job.task_id)
+    assert json.loads(row["diagnostics_json"]) == [{"code": "inference_budget_exhausted", "details": details}]
+
+
 def test_resume_no_shared_outputs_or_extra_call(worker_setup, clock, monkeypatch, tmp_path):
     import config
     monkeypatch.setattr(config, "OUTPUT_DIR", tmp_path / "official-output")

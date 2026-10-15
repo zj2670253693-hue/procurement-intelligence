@@ -138,7 +138,8 @@ def configured_services(request,backend_root):
             from database.dao import DataRepository
             from .baseline import BaselineAdapter
             official_manager=DatabaseManager().connect(create_db=False,verbose=False)
-            return BaselineAdapter(DataRepository(official_manager),Path(backend_root)/"release_assets")
+            return BaselineAdapter(DataRepository(official_manager),Path(backend_root)/"release_assets",
+                source_root=os.getenv("TASK3_OFFICIAL_SOURCE_ROOT") or None)
         from .inference_configuration import safe_configuration
         inference=safe_configuration()  # Metadata/hash validation only; no SDK/tokenizer.
         yield Services(manager._conn, RuntimePaths(Path(runtime)), jobs=jobs, auth=AuthService(manager._conn, origin=origin),

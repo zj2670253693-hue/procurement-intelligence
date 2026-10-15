@@ -18,13 +18,14 @@
       <p>上游模型预留调用：{{ task.model_ledger?.calls_reserved || 0 }}；用量未知的调用：{{ task.model_ledger?.unknown_usage_attempts || 0 }}；离线关系构建调用：0（不代表上游0调用）。</p>
       <el-alert v-if="task.status==='partial'" title="仅部分成功；下载失败清单和原始结果核对，不能当完整成功。" type="warning" :closable="false"/>
       <el-alert v-if="task.status==='needs_confirmation'" title="存在不确定模型请求，禁止自动重发；需管理员核对请求及账单。" type="warning" :closable="false"/>
+      <el-alert v-if="budgetWarning" :title="budgetWarning.title" :description="budgetWarning.description" type="warning" :closable="false"/>
       <el-alert v-if="parseOnlyFinished" type="success" :closable="false"
         title="本批次是“只解析”模式，已按设计完成：文件已解析并入库、标准三表已生成，因此基础记录为 0。"
-        description="实体识别需要大模型抽取。当前服务器付费抽取开关为关闭状态，勾选框不可用；开启后同一批文件可直接走抽取模式，无需重新上传解析规则。此页下方仍可下载标准三表与失败报告。" />
+        :description="parseOnlyDescription(caps.paid_inference_ready)" />
       <el-alert v-else-if="finishedWithoutEntities" type="warning" :closable="false"
         title="任务已结束，但本批次没有产生任何实体记录。"
         :description="'状态：' + task.status + '；基础记录 ' + (task.entities || 0) + '。若不是“只解析”模式，请下载 errors.json 核对失败原因，或联系管理员检查抽取授权与计数策略。'" />
-      <p v-if="parseOnlyFinished">下一步：本批次可下载标准三表（表头齐备、仅解析时数据行为空）；要看实体与关系，需在服务器开启抽取授权后以“抽取”模式重新提交同一批文件。</p>
+      <p v-if="parseOnlyFinished">本批次标准三表保留表头；“只解析”模式下实体数据行为空。</p>
       <pre v-if="task.diagnostics?.length">{{ JSON.stringify(task.diagnostics,null,2) }}</pre>
       <el-button @click="reconnect">重新连接进度</el-button><el-button @click="cancel">取消服务器任务</el-button>
       <el-button v-if="['failed','cancelled'].includes(task.status)" @click="retry">明确重试（不重置费用预算）</el-button>
@@ -44,9 +45,11 @@ import {getTask,listTasks,beginUpload,resumeUpload,sendPart,completeUpload,cance
 import {downloadStandard} from '../api/task2'
 import {hashParts,uploadParts} from '../services/chunkUpload'
 import {createTaskPolling,terminalStatuses} from '../services/taskPolling'
+import {budgetNotice,parseOnlyDescription} from '../services/taskDiagnostics'
 const route=useRoute(),router=useRouter(),fileList=ref([]),runExtraction=ref(false),uploading=ref(false),task=ref(null),tasks=ref([]),error=ref(''),uploadPhase=ref('等待选择文件'),uploadPercent=ref(0),caps=ref({}),budget=reactive({max_calls:8,max_input_tokens:64000,max_output_tokens:32768})
 let controller,requestKey='',receiptTask=''
 const receiving=computed(()=>task.value?.status==='receiving')
+const budgetWarning=computed(()=>budgetNotice(task.value))
 const statusText=status=>({receiving:'接收中',queued:'等待处理',running:'处理中',validating:'验收中',validated_only:'仅解析完成（无实体）',completed:'处理完成',partial:'部分成功',failed:'失败',cancelled:'已取消',needs_confirmation:'需管理员确认'}[status]||status)
 const polling=createTaskPolling({fetch:getTask,onResult:value=>{task.value=value;if(terminalStatuses.has(value.status))loadTasks()},onError:e=>{error.value='进度连接中断：'+e.message+'；任务可能仍在服务器运行，请重新连接。'}})
 // "Finished with nothing to show" was the most confusing outcome: a full progress bar
