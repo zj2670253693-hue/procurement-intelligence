@@ -78,7 +78,7 @@ def build_exports(job, inputs, raw_path, destination, *, pulse=lambda: None, tim
     environment.update(PYTHONPATH=os.pathsep.join((str(ROOT), str(ROOT / "task1_entity_extraction"))),
                        PYTHONUTF8="1", PYTHONDONTWRITEBYTECODE="1", PYTHON_DOTENV_DISABLED="1")
     child = subprocess.Popen([sys.executable, "-B", "-m", "task3_platform.export_child", str(request_path)],
-                             cwd=ROOT, env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                             cwd=ROOT, env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     started = time.monotonic()
     try:
         while child.poll() is None:
@@ -91,11 +91,21 @@ def build_exports(job, inputs, raw_path, destination, *, pulse=lambda: None, tim
             except subprocess.TimeoutExpired:
                 pass
         if child.returncode != 0:
-            raise PlatformError("export_child_failed")
+            # Discarding this made a real failure undiagnosable in production.
+            detail = b""
+            if child.stderr is not None:
+                try:
+                    detail = child.stderr.read() or b""
+                except Exception:
+                    detail = b""
+            trace = detail.decode("utf-8", "replace").strip().splitlines()
+            raise PlatformError("export_child_failed:" + (trace[-1][:200] if trace else "no_stderr"))
     finally:
         if child.poll() is None:
             child.kill()
             child.wait(timeout=10)
+        if child.stderr is not None:
+            child.stderr.close()
     projection = strict_json_loads((destination / "standard_projection.json").read_bytes())
     verify_workbook(destination / "standard.xlsx", projection["tables"], projection["headers"])
     if _hash_file(raw_path) != raw_hash or any(_hash_file(task_root / "inputs" / (aid + ".html")) != value for aid, value in fingerprints.items()):

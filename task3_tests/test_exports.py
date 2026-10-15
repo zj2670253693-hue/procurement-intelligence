@@ -157,3 +157,13 @@ def test_readback_rejects_numeric_type_and_gray_style_tamper(platform_module, ex
             archive.writestr(name, value)
     with pytest.raises(platform_module("contracts").PlatformError):
         module.verify_workbook(altered, projection["tables"], projection["headers"])
+
+
+def test_export_child_stderr_is_surfaced_not_discarded():
+    """A bare export_child_failed made a real production failure undiagnosable."""
+    source = (Path(__file__).resolve().parents[1] / "task3_platform/exports.py").read_text(encoding="utf-8")
+    assert "stderr=subprocess.PIPE" in source
+    assert "stderr=subprocess.DEVNULL" not in source
+    assert 'raise PlatformError("export_child_failed:"' in source
+    assert "no_stderr" in source
+    assert "child.stderr.close()" in source
