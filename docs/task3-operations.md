@@ -4,7 +4,7 @@
 
 任务一、二线上版本不变。此分支已实现上传、账号、持久队列、实体/关系数据集隔离、筛选、来源与导出、前端交互；已进行本地合成测试与真实浏览器渲染检查。
 
-**尚不是已验收的云端发布版本。** 还需真实隔离 MySQL、公网 HTTPS、三用户同时查询加后台处理、Ubuntu cgroup 总内存、真实模型小样本。生产API/worker已接入同一服务端配置工厂，但实际付费默认关闭；旧 `PAID_INFERENCE_ENABLED` 不能绕过。当前 `finalize_release()` 仅校验操作员报告结构，返回 `applied=false`，没有可执行的特权切换路径。不得将合成数据报告改名后充当真实验收报告。
+**尚不是已验收的云端发布版本。** 真实隔离 MySQL 边界探针已通过（同名隔离、精确小数、领取/租约/回滚/owner，旧九表指纹不变）；这不是完整平台闭环验收。还需公网 HTTPS、三用户同时查询加后台处理、Ubuntu cgroup 总内存、真实模型小样本。生产API/worker已接入同一服务端配置工厂，但实际付费默认关闭；旧 `PAID_INFERENCE_ENABLED` 不能绕过。当前 `finalize_release()` 仅校验操作员报告结构，返回 `applied=false`，没有可执行的特权切换路径。不得将合成数据报告改名后充当真实验收报告。
 
 ## 数据与权限边界
 
@@ -20,9 +20,21 @@
 1. 确认旧服务健康、当前 release/env/官方库指纹并备份。当前线上任务一计数基线为 1038/6784/14110；计数只是健康检查，不能代替内容哈希。
 2. 在阿里云 Ubuntu24.04 的 2vCPU/4GB 主机新建专用任务三验收库，授予现有应用账号**仅该库**权限；不要修改旧库或授予全局权限。
 3. 管理员显式调用 `task3_platform.migrate.migrate_platform(connection, expected_database)`，连接 `create_db=False`，一次安装13个t3表和4个独立t2依赖表。API/worker 启动和任务关系导入没有 DDL。再用 provision_user 创建三名平台用户。
-4. 配置有效公网 HTTPS 与域名/证书、同源 `TASK3_PUBLIC_ORIGIN`。若由 Nginx 终止 TLS，只信任明确配置的 loopback 代理，设置 `TASK3_TRUSTED_PROXIES`；不能盲信任任意 `X-Forwarded-Proto`。现有 HTTP 展示不作为私有登录/付费操作的安全通道。
+4. 配置有效公网 HTTPS 与域名或 IP 证书、同源 `TASK3_PUBLIC_ORIGIN`。若由 Nginx 终止 TLS，只信任明确配置的 loopback 代理，设置 `TASK3_TRUSTED_PROXIES`；不能盲信任任意 `X-Forwarded-Proto`。现有 HTTP 展示不作为私有登录/付费操作的安全通道。
 5. 先运行独立预览实例与单 worker；不要切换 `/srv/procurement-app/current`。预览与正式 worker 共用服务器级 named lock，不能同时处理。
 6. 单 worker unit 的 `MemoryMax=1024M` 是**worker 和全部孩子总和**，`MemorySwapMax=0`、`KillMode=control-group`；API drop-in 为 768M。不能仅用 Python 主进程 RSS 冒充总 cgroup 峰值，也不能用 Windows 测试证明 Linux 限额。
+
+## 无域名的 IP HTTPS 准备
+
+`deploy/task3/configure_ip_tls.py` 由管理员显式执行，需同时提供 `--apply --accept-ca-agreement-and-public-ip --ip-address <公网IPv4> --expected-host <hostname输出> --expected-nginx-sha256 <旧站点文件SHA256>`。操作者必须先同意 [Let's Encrypt 订户协议](https://letsencrypt.org/repository/) 和证书公开记录 IP。不在仓库保存实际主机名、部署 IP、证书或账户私钥。
+
+脚本限定 root、Ubuntu24.04、预期主机和旧 Nginx 文件哈希；不读取应用环境、不碰数据库、不切换 current、不启用任务三。保留 HTTP 原有路径，用独立 webroot 完成验证；在独立 `/opt/procurement-certbot58` 安装 Certbot5.8.0（不改应用 venv），先 staging dry-run 再签正式证书。独立 `/etc/letsencrypt-procurement` 保存证书/账户，私钥不出服务器。签发后检查 CA 信任链、IP SAN、剩余有效期及旧健康计数，再做一次带 reload hook 的续期 dry-run。
+
+只有以上步骤成功才启用 `procurement-ip-renew.timer`，每6小时检查、最多随机延迟30分钟，开机补执行；Certbot 仅在需要时续期，成功后 `nginx -t && systemctl reload nginx`。约6天的证书依赖该定时器；后续应检查 `systemctl list-timers procurement-ip-renew.timer` 与 `journalctl -u procurement-ip-renew.service`，不能以“定时器 active”冒充未来续期已成功。无邮箱注册不提供邮件告警，故运行告警仍需另配。
+
+失败会尝试停用新定时器、移出本次新 unit、恢复原站点文件并 reload；备份及失败文件保留在 `/var/lib/procurement-ip-tls/attempt-*`。即使停定时器失败也继续恢复站点，并明确报告恢复不完整，不覆盖已有同名 unit。再次执行前应由管理员检查上次产物，不盲目重复签证书。
+
+成功报告仅为 `host_local_ip_tls_preparation`：还要从公网、不跳过证书验证地访问 HTTPS。若本机成功而公网失败，检查阿里云入站 TCP443 和主机防火墙；不要开放 MySQL3306。HTTP 暂保留兼容现有展示，私有登录必须使用 HTTPS。此脚本本身不表示任务三已上线。[IP 证书和 webroot 官方说明](https://letsencrypt.org/2026/03/11/shorter-certs-certbot)，[Certbot 续期和 deploy hook](https://eff-certbot.readthedocs.io/en/stable/using.html#renewing-certificates)。
 
 ## 默认离线验证
 
