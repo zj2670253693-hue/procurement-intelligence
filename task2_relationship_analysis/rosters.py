@@ -5,6 +5,9 @@ from .inputs import issue
 
 def verify_rosters(candidates, index, relations):
     b = deepcopy(relations)
+    from .announcement_roles import exclude_intention_trade
+    if exclude_intention_trade(candidates, index, b):
+        return b
     by_event = {}
     parsed={}
     for table, record in table_records(index):

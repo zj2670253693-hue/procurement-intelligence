@@ -41,6 +41,9 @@ def amount_kind(header, raw, is_result=False):
 
 def verify_amounts(candidates, index, context):
     b = deepcopy(context)
+    from .announcement_roles import exclude_intention_trade
+    if exclude_intention_trade(candidates, index, b):
+        return b
     project = next(f for f in b.facts if f.kind == 'project')
     def emit(header, raw, region, event=None, owner=None, is_result=False):
         kind = amount_kind(header, raw, is_result)

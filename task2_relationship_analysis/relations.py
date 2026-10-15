@@ -5,6 +5,9 @@ from .inputs import issue
 
 def verify_relations(candidates, index, identities):
     b = deepcopy(identities)
+    from .announcement_roles import exclude_intention_trade
+    if exclude_intention_trade(candidates, index, b):
+        return b
     rows = list(table_records(index))
     bids = set()
     for table, record in rows:

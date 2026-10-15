@@ -174,8 +174,7 @@ test('chips never overlap each other, even from different sources', () => {
     }
   }
 })
-test('nodes a reader cannot tell apart are merged, evidence preserved', () => {
-  // The official data returns several distinct '合同包1' ids for one buyer.
+test('same-label packages keep their distinct fact identities and evidence', () => {
   const repeated = {
     nodes: [{ id: 'e1', kind: 'event', label: '合同包1', evidence_ids: ['a'] },
             { id: 'e2', kind: 'event', label: '合同包1', evidence_ids: ['b'] },
@@ -186,20 +185,57 @@ test('nodes a reader cannot tell apart are merged, evidence preserved', () => {
             { id: 'z', from: 'e3', to: 'w', kind: 'awarded_to', evidence_ids: ['a3'] }],
   }
   const merged = coalesceGraph(repeated)
-  assert.equal(merged.nodes.length, 3, 'the two identical 合同包1 nodes become one')
-  assert.equal(merged.merged, 1)
+  assert.equal(merged.nodes.length, 4, 'same label is not proof of the same package')
+  assert.equal(merged.merged, 0)
   const packages = merged.nodes.filter(node => node.label === '合同包1')
-  assert.equal(packages.length, 1)
-  assert.deepEqual([...packages[0].evidence_ids].sort(), ['a', 'b'])
-  assert.equal(merged.edges.length, 2, 'parallel identical edges collapse to one')
+  assert.equal(packages.length, 2)
+  assert.deepEqual(packages.map(p => [p.id, p.evidence_ids]), [['e1', ['a']], ['e2', ['b']]])
+  assert.equal(merged.edges.length, 3, 'separate package awards remain separate')
   const winnerEdge = merged.edges.find(edge => edge.from === packages[0].id)
-  assert.deepEqual([...winnerEdge.evidence_ids].sort(), ['a1', 'a2'])
+  assert.deepEqual(winnerEdge.evidence_ids, ['a1'])
   const layout = buildGraphLayout({ ...merged, kindLabels: KIND_LABELS })
-  assert.equal(layout.edges.length, 2)
+  assert.equal(layout.edges.length, 3)
   for (const edge of layout.edges) {
     assert.notEqual(edge.startX, edge.endX, 'a merged edge still spans real distance')
     assert.ok(edge.midX > edge.startX && edge.midX < edge.endX)
   }
+})
+
+test('same package names in different projects cannot create cross-project awards', () => {
+  const input = {
+    nodes: [{id:'pa',kind:'project',label:'甲项目'}, {id:'pb',kind:'project',label:'乙项目'},
+      {id:'ea',kind:'event',label:'合同包1'}, {id:'eb',kind:'event',label:'合同包1'},
+      {id:'wa',kind:'bid_subject',label:'甲公司'}, {id:'wb',kind:'bid_subject',label:'乙公司'}],
+    edges: [{id:'a',from:'ea',to:'pa',kind:'package_of'}, {id:'b',from:'eb',to:'pb',kind:'package_of'},
+      {id:'c',from:'ea',to:'wa',kind:'awarded_to'}, {id:'d',from:'eb',to:'wb',kind:'awarded_to'}],
+  }
+  const result = coalesceGraph(input)
+  assert.deepEqual(result.nodes.map(n=>n.id), input.nodes.map(n=>n.id))
+  assert.deepEqual(result.edges.map(e=>[e.from,e.to]), input.edges.map(e=>[e.from,e.to]))
+  assert.deepEqual(result.edges.filter(e=>e.from==='ea').map(e=>e.to), ['pa','wa'])
+  assert.deepEqual(result.edges.filter(e=>e.from==='eb').map(e=>e.to), ['pb','wb'])
+})
+
+test('same-label unresolved projects and companies remain distinct', () => {
+  const nodes = ['project','organization','bid_subject'].flatMap(kind=>[
+    {id:kind+'1',kind,label:'同名记录',identity_status:'identity_unresolved'},
+    {id:kind+'2',kind,label:'同名记录',identity_status:'identity_unresolved'},
+  ])
+  assert.deepEqual(coalesceGraph({nodes,edges:[]}).nodes.map(n=>n.id), nodes.map(n=>n.id))
+})
+
+test('only duplicate fact IDs may combine evidence without rewriting edge identity', () => {
+  const input = {
+    nodes:[{id:'p',kind:'event',label:'合同包1',evidence_ids:['a']},
+      {id:'p',kind:'event',label:'合同包1',evidence_ids:['b']},
+      {id:'w',kind:'bid_subject',label:'甲公司'}],
+    edges:[{id:'award-a',from:'p',to:'w',kind:'awarded_to',evidence_ids:['a']},
+      {id:'award-b',from:'p',to:'w',kind:'awarded_to',evidence_ids:['b']}],
+  }
+  const result = coalesceGraph(input)
+  assert.equal(result.nodes.length,2)
+  assert.deepEqual(result.nodes[0].evidence_ids,['a','b'])
+  assert.deepEqual(result.edges.map(e=>e.id),['award-a','award-b'])
 })
 test('layout is deterministic and empty input is safe', () => {
   const first = layout()

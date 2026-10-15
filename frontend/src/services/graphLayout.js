@@ -83,10 +83,9 @@ const rankNodes = (nodes, edges) => {
 }
 
 /**
- * Merge nodes that a reader cannot tell apart (same kind AND same label, different
- * ids). The official data really does return several distinct "合同包1" nodes for one
- * buyer; drawing one box per id produced a repeated-label column that looked broken.
- * Edge evidence is preserved by unioning evidence_ids.
+ * Coalesce repeated copies of the SAME source fact ID only. A display label is
+ * not an identity: different projects can each have a "合同包1", and unresolved
+ * organizations can have the same name. Keep each edge's own fact identity too.
  */
 export function coalesceGraph(graph = {}) {
   const nodes = Array.isArray(graph.nodes) ? graph.nodes : []
@@ -94,7 +93,7 @@ export function coalesceGraph(graph = {}) {
   const memberOf = new Map()
   const merged = new Map()
   for (const node of nodes) {
-    const key = node.kind + '\u0000' + node.label
+    const key = node.id
     const first = merged.get(key)
     if (!first) {
       const copy = { ...node, evidence_ids: [...(node.evidence_ids || [])] }
@@ -111,13 +110,13 @@ export function coalesceGraph(graph = {}) {
     const from = memberOf.get(edge.from)
     const to = memberOf.get(edge.to)
     if (!from || !to) continue
-    const key = from + '>' + to + '|' + edge.kind
+    const key = edge.id
     const existing = byKey.get(key)
     if (existing) {
       existing.evidence_ids = [...new Set([...existing.evidence_ids, ...(edge.evidence_ids || [])])]
       continue
     }
-    const copy = { ...edge, id: key, from, to, evidence_ids: [...(edge.evidence_ids || [])] }
+    const copy = { ...edge, from, to, evidence_ids: [...(edge.evidence_ids || [])] }
     byKey.set(key, copy)
     mergedEdges.push(copy)
   }
