@@ -107,7 +107,8 @@ def test_preview_environment_keeps_credentials_strips_model_keys_and_forces_isol
 
 def test_preview_units_never_point_at_production_paths_and_stay_bounded():
     module=load('install_preview')
-    api=module.render_api_unit(RELEASE,ENV);worker=module.render_worker_unit(RELEASE,ENV)
+    from pathlib import Path as _Path
+    api=module.render_api_unit(_Path(RELEASE),ENV);worker=module.render_worker_unit(_Path(RELEASE),ENV)
     for text in (api,worker):
         assert RELEASE in text and ENV in text
         assert '/srv/procurement-app/current' not in text
@@ -131,6 +132,18 @@ def test_nginx_retarget_moves_only_the_https_server_to_preview_and_keeps_http_un
     assert http==HTTP_BLOCK
     assert 'proxy_pass http://127.0.0.1:8000;' in http
     assert 'root /srv/procurement-app/current/frontend-dist;' in http
+
+
+def test_runtime_root_accepts_real_path_and_rejects_release_interior():
+    """The server passes release as a pathlib Path; every branch must still work."""
+    module=load('install_preview')
+    from pathlib import Path as _Path
+    release=_Path(RELEASE)
+    assert module.require_runtime('/srv/procurement-app/shared/runtime/task3-preview',release)=='/srv/procurement-app/shared/runtime/task3-preview'
+    assert module.require_runtime('/srv/procurement-app/other/runtime',_Path('/srv/procurement-app/releases'))=='/srv/procurement-app/other/runtime'
+    for bad in (RELEASE,RELEASE+'/runtime',RELEASE+'/',RELEASE+'/nested/deep',str(release),RELEASE+'/../runtime',RELEASE+'/./runtime'):
+        with pytest.raises(ValueError):module.require_runtime(bad,release)
+        with pytest.raises(ValueError):module.require_runtime(bad,str(release))
 
 
 def test_nginx_retarget_fails_closed_on_unexpected_topology():

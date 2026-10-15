@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import sys
+import traceback
 
 SERVICES='/etc/systemd/system'
 UNIT_API='procurement-task3-preview-api.service'
@@ -81,11 +82,17 @@ def require_origin(origin):
     return origin
 
 
+def posix_text(value):
+    """Canonical '/' form. str(WindowsPath) flips separators and would break containment."""
+    return value.as_posix() if hasattr(value,'as_posix') else str(value).replace('\\','/')
+
+
 def require_runtime(runtime,release):
     runtime=posix_path(runtime,'absolute_runtime_root_required')
-    if runtime==release or runtime.startswith(release.rstrip('/')+'/'):
+    release=posix_text(release).rstrip('/')
+    if runtime==release or runtime.startswith(release+'/'):
         fail('runtime_inside_release_forbidden')
-    return Path(runtime)
+    return runtime
 
 
 def authorize(live_database,expected_host,*,hostname=None,apply=False):
@@ -127,6 +134,7 @@ def read_env_values(text):
 
 
 def render_api_unit(release,environment_file,*,port=API_PORT,user='zhoujin',group='projectteam'):
+    release=posix_text(release).rstrip('/')
     return f'''[Unit]
 Description=Procurement Task3 isolated preview API
 After=network-online.target mysql.service
@@ -161,6 +169,7 @@ WantedBy=multi-user.target
 
 
 def render_worker_unit(release,environment_file,*,user='zhoujin',group='projectteam'):
+    release=posix_text(release).rstrip('/')
     return f'''[Unit]
 Description=Procurement Task3 isolated preview worker
 After=network-online.target mysql.service
@@ -269,6 +278,11 @@ def release_manifest(release,expected_sha):
     return release,digest,document
 
 
+def progress(step,detail=''):
+    print(json.dumps({'stage':'preview_install_progress','step':step,'detail':detail}))
+    sys.stdout.flush()
+
+
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--apply',action='store_true')
@@ -283,11 +297,15 @@ def main(argv=None):
     parser.add_argument('--nginx-site',required=True)
     parser.add_argument('--expected-host',required=True)
     parser.add_argument('--port',type=int,default=API_PORT)
+    parser.add_argument('--debug',action='store_true')
     args=parser.parse_args(argv)
+    debug=bool(args.debug)
     try:
         authorize(args.official_database,args.expected_host,hostname=os.uname().nodename,apply=args.apply)
         release,digest,_=release_manifest(args.release,args.release_manifest_sha256)
-        runtime=require_runtime(args.runtime_root,release)
+        require_runtime(args.runtime_root,release)
+        release=posix_text(release)
+        runtime=args.runtime_root
         environment=render_environment(Path(args.source_environment_file).read_text(encoding='utf-8'),
             release=release,database=args.database,runtime_root=runtime,public_origin=args.public_origin,
             official_database=args.official_database)
@@ -296,7 +314,8 @@ def main(argv=None):
         original=site.read_text(encoding='utf-8')
         updated=retarget_https_server(original,release,args.port)
     except Exception as error:
-        code=str(error) if isinstance(error,InstallerError) else 'preview_install_validation_failed'
+        code=str(error) if isinstance(error,InstallerError) else 'preview_install_validation_failed:'+type(error).__name__
+        if debug:traceback.print_exc()
         print(json.dumps({'passed':False,'code':code,'task3_deployed':False,'new_model_calls':0}))
         return 1
     report={'passed':True,'stage':'preview_install','release':str(release),'release_manifest_sha256':digest,
@@ -304,19 +323,32 @@ def main(argv=None):
         'current_release_changed':False,'official_environment_changed':False,'new_model_calls':0,
         'paid_inference':False,'privileged_cutover_available':False,'task3_deployed':True,'steps':[]}
     environment_file=Path(args.environment_file)
-    if environment_file.exists():report['steps'].append('environment_reused');environment_file.read_text(encoding='utf-8')
-    else:
-        environment_file.parent.mkdir(parents=True,exist_ok=True,mode=0o750)
-        environment_file.write_text(environment,encoding='utf-8');os.chmod(environment_file,0o640)
-        report['steps'].append('environment_written')
-    for name,content in ((UNIT_API,render_api_unit(release,args.environment_file,port=args.port)),
-                         (UNIT_WORKER,render_worker_unit(release,args.environment_file))):
-        target=Path(SERVICES)/name
-        target.write_text(content,encoding='utf-8');os.chmod(target,0o644)
-        report['steps'].append('unit_written:'+name)
-    shutil.copyfile(site,str(site)+'.task3-preview-backup')
-    site.write_text(updated,encoding='utf-8')
-    report['steps'].append('nginx_retargeted')
+    try:
+        progress('validated',str(release))
+        if environment_file.exists():
+            report['steps'].append('environment_reused');environment_file.read_text(encoding='utf-8')
+        else:
+            environment_file.parent.mkdir(parents=True,exist_ok=True,mode=0o750)
+            environment_file.write_text(environment,encoding='utf-8');os.chmod(environment_file,0o640)
+            report['steps'].append('environment_written')
+        progress('environment',args.environment_file)
+        for name,content in ((UNIT_API,render_api_unit(release,args.environment_file,port=args.port)),
+                             (UNIT_WORKER,render_worker_unit(release,args.environment_file))):
+            target=Path(SERVICES)/name
+            target.write_text(content,encoding='utf-8');os.chmod(target,0o644)
+            report['steps'].append('unit_written:'+name)
+            progress('unit',name)
+        shutil.copyfile(site,str(site)+'.task3-preview-backup')
+        progress('backup',str(site)+'.task3-preview-backup')
+        site.write_text(updated,encoding='utf-8')
+        report['steps'].append('nginx_retargeted')
+        progress('nginx',args.nginx_site)
+    except Exception as error:
+        code=str(error) if isinstance(error,InstallerError) else 'preview_install_write_failed:'+type(error).__name__
+        if debug:traceback.print_exc()
+        print(json.dumps({'passed':False,'code':code,'steps':report['steps'],
+            'task3_deployed':False,'new_model_calls':0}))
+        return 1
     print(json.dumps(report))
     return 0
 
