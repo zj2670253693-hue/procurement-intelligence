@@ -97,3 +97,13 @@ def test_mysql_probe_only_hashes_whitelisted_tables_and_uses_isolated_environmen
     assert env['TASK3_MYSQL_TEST_DB']==env['DB_NAME']=='procurement_task3_accept_synthetic'
     assert env['TASK3_PAID_ENABLED']=='0' and 'DEEPSEEK_API_KEY' not in env
     with pytest.raises(ValueError):module.acceptance_environment(config,config['DB_NAME'],tmp_path,tmp_path/'test-deps')
+
+
+def test_mysql_workflow_receipts_are_explicit_private_paths_not_model_configuration(tmp_path):
+    module=load('run_mysql_acceptance')
+    config={'DB_HOST':'127.0.0.1','DB_USER':'synthetic','DB_PASSWORD':'synthetic-secret','DB_NAME':'procurement_kg_v14_20261014'}
+    env=module.acceptance_environment(config,'procurement_task3_accept_synthetic',tmp_path,tmp_path/'deps',
+        workflow_runtime=tmp_path/'workflow-runtime',workflow_receipts=tmp_path/'private-evidence')
+    assert env['TASK3_MYSQL_WORKFLOW_RUNTIME']==str(tmp_path/'workflow-runtime')
+    assert env['TASK3_MYSQL_WORKFLOW_RECEIPTS']==str(tmp_path/'private-evidence')
+    assert env['TASK3_PAID_ENABLED']=='0' and not any('API_KEY' in key for key in env)

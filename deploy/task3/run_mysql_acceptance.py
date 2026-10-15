@@ -38,7 +38,22 @@ def fingerprints(connection):
     return result
 
 
-def acceptance_environment(config,target,root,dependencies):
+def safe_path(path):
+    path=Path(path)
+    if not path.is_absolute() or path==Path(path.anchor):raise ValueError('absolute_probe_path_required')
+    for item in (path,*path.parents):
+        if item.is_symlink() or getattr(item,'is_junction',lambda:False)():raise ValueError('linked_probe_path_forbidden')
+    return path
+
+
+def private_directory(path,code):
+    """Explicit operator-supplied private path; never inferred from the model config."""
+    path=safe_path(path)
+    if path==Path(path.anchor):raise ValueError(code)
+    return path
+
+
+def acceptance_environment(config,target,root,dependencies,*,workflow_runtime=None,workflow_receipts=None):
     isolated(target,config['DB_NAME'])
     values={key:value for key,value in os.environ.items() if key.upper() in
             {'PATH','SYSTEMROOT','WINDIR','TEMP','TMP','TMPDIR','LANG','LC_ALL'}}
@@ -50,15 +65,11 @@ def acceptance_environment(config,target,root,dependencies):
         DB_HOST='127.0.0.1',DB_PORT=str(config.get('DB_PORT','3306')),DB_USER=config['DB_USER'],
         DB_PASSWORD=config['DB_PASSWORD'],DB_NAME=target,DB_ENABLED='false',
         OMP_NUM_THREADS='1',OPENBLAS_NUM_THREADS='1',MKL_NUM_THREADS='1')
+    if workflow_runtime is not None:
+        values['TASK3_MYSQL_WORKFLOW_RUNTIME']=str(private_directory(workflow_runtime,'absolute_workflow_runtime_required'))
+    if workflow_receipts is not None:
+        values['TASK3_MYSQL_WORKFLOW_RECEIPTS']=str(private_directory(workflow_receipts,'absolute_workflow_receipts_required'))
     return values
-
-
-def safe_path(path):
-    path=Path(path)
-    if not path.is_absolute() or path==Path(path.anchor):raise ValueError('absolute_probe_path_required')
-    for item in (path,*path.parents):
-        if item.is_symlink() or getattr(item,'is_junction',lambda:False)():raise ValueError('linked_probe_path_forbidden')
-    return path
 
 
 def run(args):
