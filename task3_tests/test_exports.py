@@ -61,6 +61,39 @@ def test_saved_three_tables_exact_decimals_and_empty(platform_module, export_inp
     assert report["row_counts"]["标的表"] == 1
 
 
+def test_uploaded_plain_html_preserves_explicit_summary_metadata(platform_module, export_input):
+    """A valid upload need not carry CCGP's optional 公告信息 mirror table."""
+    from dataclasses import replace
+    job, inputs, raw, task, *_ = export_input
+    html = inputs[0].html_path
+    html.write_text("""<html><head><title>合成项目成交公告</title></head><body>
+      <p>项目名称：合成项目</p><h6>采购人信息</h6><p>名称：合成采购人</p>
+      <h6>采购代理机构信息</h6><p>名称：不能填为采购人的代理机构</p>
+      <p>三、中标（成交）信息</p><p>合同包1</p>
+      <table><tr><th>供应商名称</th><th>中标金额</th></tr>
+      <tr><td>合成供应商</td><td>1.23000000万元</td></tr></table>
+      <p>四、主要标的信息</p><table><tr><th>货物名称</th><th>数量</th><th>单价(万元)</th></tr>
+      <tr><td>合成设备</td><td>1套</td><td>1.23000000</td></tr></table>
+      </body></html>""", encoding="utf-8")
+    inputs = [replace(inputs[0], html_sha=hashlib.sha256(html.read_bytes()).hexdigest())]
+    records = json.loads(raw.read_bytes())
+    # The fallback must read the source, NOT trust hallucinated extra_info.
+    records[0]["extra_info"] = {"project_name": "伪造项目", "procurement_unit": "伪造采购人",
+                                 "winning_supplier": "伪造供应商", "project_amount": "999亿元"}
+    raw.write_text(json.dumps(records, ensure_ascii=False), encoding="utf-8")
+    platform_module("exports").build_exports(job, inputs, raw, task.exports)
+    projection = json.loads((task.exports / "standard_projection.json").read_bytes())
+    row = projection["tables"]["总表"][0]
+    assert row["项目名称"] == "合成项目"
+    assert row["采购单位"] == "合成采购人"
+    assert row["中标供应商"] == "合成供应商"
+    assert row["中标金额"] == "1.23"
+    assert row["标段/合同包"] == "合同包1"
+    assert row["UUID"] == inputs[0].announcement_id + "_01"
+    assert row["备注"] == ""
+    assert json.loads((task.exports / "raw_results.json").read_bytes()) == records
+
+
 def test_zero_results_produce_real_header_only_workbook(platform_module, export_input):
     module = platform_module("exports")
     job, inputs, raw, task, *_ = export_input
@@ -104,6 +137,33 @@ def test_download_scope_and_tamper(platform_module, export_input, actor_a, actor
     with pytest.raises(platform_module("contracts").PlatformError) as rejected:
         service.resolve(actor_a, job.upload_dataset_id, "standard.xlsx")
     assert rejected.value.code == "artifact_integrity"
+
+
+@pytest.mark.parametrize("name", ["standard.xlsx", "standard_projection.json", "export_report.json", "总表.csv"])
+def test_summary_revision_preserves_old_receipt_and_checks_owner_and_hash(platform_module, export_input, actor_a, actor_b, name):
+    from dataclasses import replace
+    job, inputs, raw, task, jobs, paths, lease = export_input
+    artifacts, _ = platform_module("exports").build_exports(job, inputs, raw, task.exports)
+    module = platform_module("artifacts")
+    service = module.ArtifactService(jobs, paths)
+    service.register(lease, artifacts)
+    original = next(artifact for artifact in artifacts if artifact.name == name)
+    original_bytes = (task.exports / name).read_bytes()
+    revision_name = module.SUMMARY_REVISIONS[name]
+    revision_path = task.exports / revision_name
+    revision_path.write_bytes(original_bytes)
+    revision = replace(original, name=revision_name,
+                       relative_path=revision_path.relative_to(paths.root).as_posix())
+    service.register(lease, [revision])
+    assert service.resolve(actor_a, job.upload_dataset_id, name).path == revision_path
+    assert service.resolve(actor_a, job.upload_dataset_id, revision_name).path == revision_path
+    assert (task.exports / name).read_bytes() == original_bytes
+    with pytest.raises(platform_module("contracts").PlatformError):
+        service.resolve(actor_b, job.upload_dataset_id, name)
+    revision_path.write_bytes(b"tampered revision")
+    with pytest.raises(platform_module("contracts").PlatformError) as rejected:
+        service.resolve(actor_a, job.upload_dataset_id, name)
+    assert rejected.value.code == "artifact_integrity", "tampered revision must not silently fall back"
 
 
 def test_partial_diagnostics_are_not_lost(platform_module, export_input):

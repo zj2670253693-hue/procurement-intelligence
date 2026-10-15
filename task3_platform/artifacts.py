@@ -9,6 +9,17 @@ from .paths import reject_link_ancestors
 from .uploads import _hash_file
 
 
+# Historical exports are immutable. An explicitly installed, source-verified
+# revision may satisfy the existing download URL without destroying its original
+# file or SHA receipt. Future jobs already produce corrected primary exports.
+SUMMARY_REVISIONS = {
+    "standard.xlsx": "standard.summary-v1.xlsx",
+    "standard_projection.json": "standard_projection.summary-v1.json",
+    "export_report.json": "export_report.summary-v1.json",
+    "总表.csv": "总表.summary-v1.csv",
+}
+
+
 @dataclass(frozen=True)
 class VerifiedFile:
     path: Path
@@ -60,8 +71,14 @@ class ArtifactService:
             if not dataset:
                 raise PlatformError("dataset_not_found", 404)
             require_owner(actor, dataset["owner_id"])
-            cursor.execute("SELECT * FROM t3_artifacts WHERE upload_dataset_id=%s AND name=%s", (dataset_id, name))
-            row = cursor.fetchone()
+            row = None
+            if name in SUMMARY_REVISIONS:
+                cursor.execute("SELECT * FROM t3_artifacts WHERE upload_dataset_id=%s AND name=%s",
+                               (dataset_id, SUMMARY_REVISIONS[name]))
+                row = cursor.fetchone()
+            if row is None:
+                cursor.execute("SELECT * FROM t3_artifacts WHERE upload_dataset_id=%s AND name=%s", (dataset_id, name))
+                row = cursor.fetchone()
         if not row:
             raise PlatformError("artifact_not_found", 404)
         return self._verify(dataset["task_id"], Artifact(row["name"], row["relative_path"], row["sha256"], row["bytes"], row["kind"]))

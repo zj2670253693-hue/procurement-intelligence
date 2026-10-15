@@ -159,6 +159,7 @@ def main():
     tools_root = Path(__file__).resolve().parents[1] / "tools/task1_standard_export"
     sys.path.insert(0, str(tools_root))
     import standard_export, price_projection
+    from .export_source import restore_uploaded_summary
     raw_path = Path(request["raw_path"])
     all_records = strict_json_loads(raw_path.read_bytes())
     if not isinstance(all_records, list):
@@ -171,7 +172,7 @@ def main():
             raise PlatformError("export_source_integrity", 409)
         aid = source["announcement_id"]
         html_by_id[aid] = html
-        sources[aid] = standard_export.parse_source(html, aid)
+        sources[aid] = restore_uploaded_summary(html, standard_export.parse_source(html, aid))
     bundle = standard_export.project(records, sources)
     bundle, price_changes = price_projection.project_prices(bundle, records, bundle["name_metadata_joins"],
                          lambda aid: _source_prices(aid, sources[aid], html_by_id[aid]))
