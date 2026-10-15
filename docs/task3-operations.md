@@ -116,6 +116,10 @@ sudo /srv/procurement-app/shared/venv/bin/python -B deploy/task3/install_preview
 
 ## 发布及回滚前不可省略
 
+已完成HTTPS切换后，仅修复HTTP入口可用`deploy/task3/redirect_https.py`。先以`--check --plan <受限计划JSON> --plan-sha256 <SHA>`运行与正式写入共用的只读预检，再由管理员显式使用`--apply`。计划固定当前站点、env和两个unit的哈希、新预览release清单、原正式current、公开HTTPS地址、实际健康和任务二版本。JSON中的保护路径统一为字符串，不能与Path键字典直接比较。
+
+该工具只替换一个HTTP server块，完整保留ACME webroot和HTTPS块，其他HTTP请求用308保留URI跳至HTTPS。不重启API/worker、不改数据库或模型策略。Nginx reload返回后，用新连接核对HTTP状态与Location，再验证可信HTTPS健康和关系版本；连续两轮通过才成功，旧worker短暂返回200会有界重试，不假定reload立即完成。失败保留安全原因码、恢复原站点并检验恢复结果。备份与报告位于`/var/lib/procurement-http-redirects/attempt-*`，不能把仅HTTP恢复当成整包回滚。
+
 对已经安装的独立预览，可用 `update_preview.py --apply --plan <私有计划JSON> --plan-sha256 <已核对SHA>` 进行**预览更新**。仅root在预期主机执行，验证新旧release全部声明文件、两个unit/env/Nginx的预期SHA、共享原文SHA及无活动任务/不确定请求；在私有目录备份后只替换预览unit的WorkingDirectory、HTTPS静态root，并添加只读原文根。付费策略、密钥、预算、旧HTTP、旧env/current/DB均不变。真实九表指纹前后核对；失败尝试恢复全部配置并检查服务，明确报告回滚不完整，不删任何发布或数据。此工具不代表正式发布验收，管理员运行后仍需真实浏览器复验。
 
 若旧预览清单与现状不符，默认拒绝。本次独立审计确认仅旧 `backend/task3_platform/ledger.py` 与先前保留的操作员诊断草稿逐字哈希一致；可在已核对SHA的私有计划中单独声明该旧文件当前SHA。工具只接受这一条明确路径的旧版例外，其余旧文件和全部新文件仍严格核对；不重签旧清单、不放行未知差异、不允许新发布使用例外。应在报告中保留该差异，不能宣传旧预览从未被修改。
