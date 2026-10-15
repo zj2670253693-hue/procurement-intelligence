@@ -126,6 +126,16 @@ def test_https_locations_always_forward_the_scheme_header():
     assert api.count('X-Forwarded-Proto')==1, api
 
 
+def test_session_read_route_does_not_demand_csrf():
+    """Requiring CSRF on a GET made a legitimate refresh after login fail with 403."""
+    source=(Path(__file__).resolve().parents[1]/'task3_platform/web_auth.py').read_text(encoding='utf-8')
+    route=source[source.index('@api.get("/session")'):source.index('@api.post("/logout")')]
+    assert 'require_csrf' not in route
+    assert 'services.actor(request)' in route
+    logout=source[source.index('@api.post("/logout")'):]
+    assert 'mutation=True' in logout
+
+
 def test_claim_ignores_a_lock_whose_task_is_gone(temp_connection=None):
     """A deleted or finished task must never block the queue forever."""
     source=(Path(__file__).resolve().parents[1]/'task3_platform/job_store.py').read_text(encoding='utf-8')

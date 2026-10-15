@@ -54,10 +54,10 @@ def router(provider):
         return {"user_id": session.actor.user_id, "role": session.actor.role, "csrf": session.csrf}
     @api.get("/session")
     def session(request: Request, services=Depends(provider)):
+        # A read: the session cookie alone authenticates it. Requiring CSRF here
+        # made a legitimate refresh after login fail with 403.
         actor = services.actor(request)
-        csrf = request.cookies.get("t3_csrf")
-        services.auth.require_csrf(request.cookies.get("t3_session"), csrf, services.auth.origin)
-        return {"user_id": actor.user_id, "role": actor.role, "csrf": csrf}
+        return {"user_id": actor.user_id, "role": actor.role, "csrf": request.cookies.get("t3_csrf")}
     @api.post("/logout")
     def logout(request: Request, response: Response, services=Depends(provider)):
         services.actor(request, mutation=True)
