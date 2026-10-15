@@ -9,7 +9,8 @@
       <span class="legend-item"><i class="line-swatch lost" />明确未中标</span>
       <span class="legend-item"><i class="line-swatch unknown" />参与投标但原文未明确结果</span>
     </div>
-    <p class="graph-note">结果未明确不代表未中标。每条线均标注关系；箭头指向关系对象，点击线或标签可查看原文证据。组织名称不代表已核验法人身份。</p>
+    <p class="graph-note">结果未明确不代表未中标。箭头指向关系对象，点击连线或标签可查看信息来源。</p>
+    <details class="graph-explanation"><summary>关系说明</summary>图中的公司或机构名称来自公告，不代表已核验其法人身份。同一项目的投标记录不一定属于同一个采购包。</details>
     <div class="graph-scroll">
       <svg v-if="nodes.length" :viewBox="`0 0 ${layout.width} ${layout.height}`"
         :style="{width: layout.width + 'px', height: layout.height + 'px'}" role="img" aria-label="已验证关系图">
@@ -70,7 +71,7 @@ const arrowPath = edge => {
 .graph-legend{display:flex;flex-wrap:wrap;gap:10px 20px;align-items:center;font-size:13px;color:#344054}
 .legend-item{display:inline-flex;align-items:center;gap:7px}.node-swatch{width:14px;height:14px;border:1px solid #c3cedd;border-radius:4px}.legend-divider{height:18px;border-left:1px solid #d0d5dd}
 .line-swatch{width:24px;border-top:2px solid currentColor}.line-swatch.unknown{border-top-style:dashed}
-.graph-note{font-size:13px;line-height:1.7;color:#526078;margin:12px 0}.graph-scroll{overflow:auto;max-height:680px;border:1px solid #e3e8f0;border-radius:10px;background:linear-gradient(180deg,#fbfcfe,#f6f8fc)}
+.graph-note,.graph-explanation{font-size:13px;line-height:1.7;color:#526078;margin:12px 0}.graph-explanation summary{cursor:pointer}.graph-scroll{overflow:auto;max-height:680px;border:1px solid #e3e8f0;border-radius:10px;background:linear-gradient(180deg,#fbfcfe,#f6f8fc)}
 svg{display:block}g[role=button],.edge-hit{cursor:pointer}g[role=button]:focus{outline:2px solid #2879ce;outline-offset:2px}
 .structure{color:#526b8c}.won{color:#16804c}.lost{color:#b54708}.unknown{color:#667085}
 .edge-line{fill:none;stroke:currentColor;stroke-width:1.6}.unknown .edge-line{stroke-dasharray:6 4}.edge-tip{fill:currentColor}.edge-hit{fill:none;stroke:transparent;stroke-width:14}

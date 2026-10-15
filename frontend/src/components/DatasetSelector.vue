@@ -1,10 +1,10 @@
 <template>
   <div class="dataset-bar">
-    <span>当前数据集</span>
+    <span>当前数据</span>
     <el-select :model-value="selected" @change="select" style="width:340px">
-      <el-option v-for="item in choices" :key="item.upload_dataset_id" :value="item.upload_dataset_id" :label="item.label || `${item.upload_dataset_id} · ${item.availability}`" :disabled="!['completed','partial'].includes(item.availability)" />
+      <el-option v-for="(item,index) in choices" :key="item.upload_dataset_id" :value="item.upload_dataset_id" :label="datasetChoiceLabel(item,Math.max(1,index))" :disabled="!['completed','partial'].includes(item.availability)" />
     </el-select>
-    <el-button @click="refresh">刷新批次</el-button><el-button v-if="user" @click="exit">退出平台账号</el-button><router-link v-else to="/login">平台登录</router-link>
+    <el-button @click="refresh">刷新列表</el-button><el-button v-if="user" @click="exit">退出登录</el-button><router-link v-else to="/login">登录</router-link>
     <small v-if="error">{{ error }}（官方只读展示不受影响）</small>
   </div>
 </template>
@@ -13,6 +13,7 @@ import {ref,computed,onMounted} from 'vue'
 import {useRoute,useRouter} from 'vue-router'
 import {listDatasets} from '../api/task3'
 import {session,logout} from '../api/auth'
+import {datasetChoiceLabel} from '../services/userPresentation'
 const route=useRoute(),router=useRouter(),choices=ref([{upload_dataset_id:'official',availability:'completed',label:'官方冻结数据（只读）'}]),error=ref(''),user=ref(null)
 const selected=computed(()=>route.query.dataset_id || 'official')
 function select(id){router.replace({path:route.path,query:{...route.query,dataset_id:id}})}

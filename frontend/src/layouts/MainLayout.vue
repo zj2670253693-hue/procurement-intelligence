@@ -11,13 +11,13 @@
         </div>
       </div>
 
-      <div class="nav-group-label">技术指标</div>
+      <div class="nav-group-label">数据查询</div>
 
       <el-menu :default-active="activeMenu" :default-openeds="defaultOpeneds" router class="nav">
         <el-sub-menu index="task1">
           <template #title>
             <el-icon><Search /></el-icon>
-            <span>任务一 · 实体识别与自动化提取</span>
+            <span>公告与采购信息</span>
           </template>
           <el-menu-item index="/task1/stats">
             <el-icon><PieChart /></el-icon>
@@ -25,28 +25,28 @@
           </el-menu-item>
           <el-menu-item index="/task1/entities">
             <el-icon><Files /></el-icon>
-            <span>标的物检索</span>
+            <span>产品与服务查询</span>
           </el-menu-item>
         </el-sub-menu>
 
         <el-sub-menu index="task2">
           <template #title>
             <el-icon><Share /></el-icon>
-            <span>任务二 · 用户画像与关系分析</span>
+            <span>供应商与采购关系</span>
           </template>
           <el-menu-item index="/task2">
             <el-icon><Connection /></el-icon>
-            <span>业务场景查询</span>
+            <span>关系查询</span>
           </el-menu-item>
         </el-sub-menu>
       </el-menu>
 
-      <div class="nav-group-label">平台能力</div>
+      <div class="nav-group-label">我的数据</div>
 
       <el-menu :default-active="activeMenu" router class="nav">
         <el-menu-item index="/task3">
           <el-icon><UploadFilled /></el-icon>
-          <span>任务三 · 数据集上传与处理</span>
+          <span>上传与处理</span>
         </el-menu-item>
       </el-menu>
 
@@ -76,7 +76,7 @@
           </div>
           <div class="conn" :class="connected ? 'is-on' : 'is-off'">
             <span class="dot" />
-            {{ connected ? '后端已连接' : '后端未连接' }}
+            {{ connected ? '服务正常' : '服务暂不可用' }}
           </div>
         </div>
       </el-header>

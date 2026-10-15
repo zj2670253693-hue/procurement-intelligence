@@ -1,7 +1,8 @@
 <template>
   <div v-loading="loading">
-    <el-button type="primary" @click="downloadStandardResult">下载任务一标准三表（总表／标的表／投标人表）</el-button>
-    <p class="page-hint">以下计数为保留的原始基础层。比赛标准三表会单独进行采购包汇总、分类及金额单位规范化；附件候选明细不作为实际中标或准确率指标。</p>
+    <el-button type="primary" @click="downloadStandardResult">下载结果表格（项目／采购内容／投标方）</el-button>
+    <p class="page-hint">填充率表示有内容的记录占比，不等于提取准确率。公告未公示的信息会保留空缺，不强行补全。</p>
+    <details class="page-hint"><summary>查看统计和导出说明</summary><p>以下统计保留原始提取记录。导出的总表、标的表和投标人表会按采购包汇总，并统一金额单位；附件待核实明细不代表实际中标。</p></details>
     <el-alert
       v-if="error"
       :title="error"
@@ -31,7 +32,6 @@
     <el-card shadow="never" class="mt-16">
       <template #header>
         <span>核心字段填充率</span>
-        <span class="page-hint">数据来源：GET /api/stats</span>
       </template>
 
       <el-table :data="fieldRows" stripe>
@@ -63,7 +63,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="结论" width="130">
+        <el-table-column label="填充程度" width="130">
           <template #default="{ row }">
             <el-tag :type="rateTag(row.rate)" effect="light" size="small">
               {{ rateLabel(row.rate) }}
@@ -140,10 +140,10 @@ function rateTag(rate) {
 }
 
 function rateLabel(rate) {
-  if (rate >= 95) return '优秀'
-  if (rate >= 85) return '良好'
-  if (rate >= 70) return '待优化'
-  return '需重点优化'
+  if (rate >= 95) return '较高'
+  if (rate >= 85) return '较高'
+  if (rate >= 70) return '中等'
+  return '较低'
 }
 
 watch(datasetId,async (id) => {

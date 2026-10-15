@@ -34,13 +34,13 @@
       </div>
     </el-card>
 
-    <el-collapse><el-collapse-item title="七字段组合筛选（同一批次；金额范围单位：万元）">
+    <el-collapse><el-collapse-item title="更多筛选条件（金额单位：万元）">
       <el-row :gutter="12"><el-col v-for="column in columns" :key="column.prop" :span="8">
         <el-input v-model="fieldText[column.prop]" :placeholder="column.label + '包含'" clearable />
         <el-select v-model="fieldMissing[column.prop]" clearable placeholder="缺失状态不限"><el-option label="未公示/空值" value="missing"/><el-option label="有明确内容" value="present"/></el-select>
       </el-col></el-row>
       <el-row :gutter="12"><el-col v-for="field in ['unit_price','quantity','total_price']" :key="field" :span="8">
-        <el-input v-model="rangeLow[field]" :placeholder="`${field} 下限（原精度）`"/><el-input v-model="rangeHigh[field]" placeholder="上限（原精度）"/>
+        <el-input v-model="rangeLow[field]" :placeholder="`${columns.find(c=>c.prop===field)?.label}下限`"/><el-input v-model="rangeHigh[field]" placeholder="上限"/>
       </el-col></el-row>
       <el-select v-model="quantityUnit" clearable placeholder="数量范围需明确单位"><el-option v-for="unit in quantityUnits" :key="unit" :label="unit" :value="unit"/></el-select>
       <p>单位不明、预算、折扣和未知值只保留原文，不参与数值区间计算。</p>
@@ -61,7 +61,7 @@
 
         <el-table-column
           prop="announcement_id"
-          label="公告ID"
+          label="公告编号"
           width="170"
           fixed
           show-overflow-tooltip
@@ -138,15 +138,15 @@
       />
 
       <el-tabs v-model="drawer.tab" @tab-change="onTabChange">
-        <el-tab-pane label="比赛标准行（金额：万元）" name="standard">
+        <el-tab-pane label="汇总结果（金额：万元）" name="standard">
           <el-alert v-if="standardItems.error" :title="standardItems.error" type="error" :closable="false" />
           <el-button v-if="standardItems.error" @click="openAnnouncement(drawer.id)">重试加载</el-button>
-          <el-alert title="标准三表是独立汇总、单位规范化的输出；下方原始基础层和附件候选明细仍保留，不用预算或未知值强行填充。" type="info" :closable="false" />
+          <el-alert title="结果按采购包汇总，并统一金额单位。未公示的信息保留空缺，不使用预算替代成交金额。" type="info" :closable="false" />
           <el-table :data="standardItems.items" stripe max-height="600"><el-table-column v-for="h in standardItems.headers" :key="h" :prop="h" :label="h" min-width="160" /></el-table>
-          <pre class="doc-text">{{ officialNotes }}</pre>
+          <details><summary>分类备注与导出详情</summary><pre class="doc-text">{{ officialNotes }}</pre></details>
         </el-tab-pane>
-        <el-tab-pane label="附件候选明细（高级展示）" name="details">
-          <el-alert title="附件行尚未逐条核实为实际中标，可能是预算或采购需求；不计作基础准确率或已发生交易。" type="warning" :closable="false" />
+        <el-tab-pane label="附件明细（待核实）" name="details">
+          <el-alert title="这些附件记录可能是采购计划或预算，尚未逐条确认为实际中标，不能当作已发生的交易。" type="warning" :closable="false" />
           <p>解析状态：{{ attachmentDetails.detail_status || '未知' }}；{{ attachmentDetails.detail_error_message }}</p>
           <el-table :data="attachmentDetails.items" stripe max-height="600"><el-table-column v-for="c in detailColumns" :key="c.prop" :prop="c.prop" :label="c.label" min-width="160" /></el-table>
         </el-tab-pane>

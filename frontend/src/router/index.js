@@ -9,7 +9,7 @@ import MainLayout from '../layouts/MainLayout.vue'
  *   任务三 可视化分析检索平台     -> 已实现数据集上传
  */
 const routes = [
-  {path:'/login',component:()=>import('../views/LoginView.vue'),meta:{title:'平台账号登录'}},
+  {path:'/login',component:()=>import('../views/LoginView.vue'),meta:{title:'账号登录'}},
   {
     path: '/',
     component: MainLayout,
@@ -21,7 +21,7 @@ const routes = [
         component: () => import('../views/StatsView.vue'),
         meta: {
           title: '数据总览',
-          headerDesc: '任务一提取结果的整体情况与核心字段填充率',
+          headerDesc: '查看公告数量、采购信息和字段完整情况',
         },
       },
       {
@@ -29,8 +29,8 @@ const routes = [
         name: 'task1-entities',
         component: () => import('../views/EntitiesView.vue'),
         meta: {
-          title: '标的物检索',
-          headerDesc: '按关键词与字段条件检索全部标的物提取结果',
+          title: '产品与服务查询',
+          headerDesc: '查找采购产品、服务、价格及对应公告',
         },
       },
       {
@@ -38,7 +38,7 @@ const routes = [
         name: 'task2',
         component: () => import('../views/RelationshipsView.vue'),
         meta: {
-          title: '用户画像建模与关系分析',
+          title: '供应商与采购关系',
           headerDesc: '采购单位 - 中标供应商 - 投标参与方关系分析',
           description:
             '基于竞标与得分数据，构建「采购单位 - 中标供应商 - 投标参与方」关系模型，支撑用户画像与竞争合作分析。',
@@ -56,8 +56,8 @@ const routes = [
         name: 'task3',
         component: () => import('../views/UploadView.vue'),
         meta: {
-          title: '数据集上传与自动处理',
-          headerDesc: '批量上传同规范数据集，自动解析、实体抽取与结构化入库',
+          title: '上传与处理',
+          headerDesc: '上传采购公告及附件，读取文件或提取采购信息',
         },
       },
     ],
