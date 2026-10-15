@@ -40,6 +40,8 @@
 
 准备代码包可用 `deploy/task3/build_preview_bundle.py --frontend-dist <已校验构建目录> --output <不存在的新ZIP>`。只读取 Git 已跟踪且允许的 Python 包/requirements 与已构建前端，包含 Task3、Task2、标准导出工具及平铺后的旧核心；排除私有结果、原始数据、`.env`、未跟踪文件和测试目录。源码未提交变更会拒绝以 HEAD 标记，已有包不会覆盖。每个文件有SHA清单，ZIP本身也有SHA。冻结 `release_assets` 不进这个代码包，后续应在服务器内从当前冻结版本复制并核对。`code_bundle_prepared` 不是已安装/已验收报告；它也不能证明操作者提供的 dist 与源代码语义一致，仍需保留独立的前端构建/浏览器证据。
 
+`deploy/task3/prepare_preview.py --bundle <服务器代码ZIP> --bundle-sha256 <已核对SHA> --destination /srv/procurement-app/releases/task3-preview-<编号> --expected-current-release <当前解析后的真实release路径> --old-manifest-sha256 <旧manifest的SHA>` 只准备新目录。它核对代码包精确清单、旧manifest及全部冻结展示文件，复制时再次核对哈希，并拒绝已有目标、私有环境文件、路径逃逸、链接和旧资产清单外文件；预留4GiB磁盘。旧 `.env` 和旧后端代码不会顺带复制，只有明确列出的冻结 `release_assets` 在服务器内部复制。失败的部分新目录保留供排查，不自动删除。`files_prepared` 不迁移DB、不创建账号、不改环境/服务/Nginx/current，也不代表实际功能已验收。
+
 ```text
 python -B -m pytest -q
 node --test frontend/tests/*.test.js
