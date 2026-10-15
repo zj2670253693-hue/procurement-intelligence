@@ -60,3 +60,13 @@ def test_update_failure_restores_every_snapshot_and_checks_rollback():
     assert writes==list(snapshots.items())
     assert restored is False
     assert ['nginx','-t'] in commands and ['systemctl','reload','nginx'] in commands
+
+
+def test_official_fingerprint_connection_is_actually_streaming(monkeypatch):
+    import pymysql
+    from pymysql.cursors import SSDictCursor
+    m=load('update_preview');calls=[]
+    monkeypatch.setattr(pymysql,'connect',lambda **kwargs:calls.append(kwargs))
+    m.connect({'DB_HOST':'127.0.0.1','DB_USER':'synthetic','DB_PASSWORD':'synthetic-placeholder'},
+        'synthetic_official',streaming=True)
+    assert calls[0]['cursorclass'] is SSDictCursor

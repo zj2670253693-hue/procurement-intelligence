@@ -118,17 +118,17 @@ def atomic(path,data):
     os.replace(temporary,path)
 
 
-def connect(values,database):
+def connect(values,database,*,streaming=False):
     import pymysql
-    from pymysql.cursors import DictCursor
+    from pymysql.cursors import DictCursor,SSDictCursor
     if values.get('DB_HOST')!='127.0.0.1':fail('loopback_database_required')
     return pymysql.connect(host='127.0.0.1',port=int(values.get('DB_PORT','3306')),
         user=values['DB_USER'],password=values['DB_PASSWORD'],database=database,
-        cursorclass=DictCursor,charset='utf8mb4',connect_timeout=10,read_timeout=30)
+        cursorclass=SSDictCursor if streaming else DictCursor,charset='utf8mb4',connect_timeout=10,read_timeout=30)
 
 
 def fingerprints(values):
-    connection=connect(values,values['DB_NAME']);result={}
+    connection=connect(values,values['DB_NAME'],streaming=True);result={}
     try:
         connection.begin()
         for table,order in TABLES.items():
