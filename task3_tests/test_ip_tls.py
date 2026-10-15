@@ -1,6 +1,8 @@
 """Admin TLS orchestration: real temporary files, external programs at boundary."""
 from pathlib import Path
 import hashlib
+import os
+import stat
 import pytest
 from task3_tests.test_deployment import load
 
@@ -119,3 +121,14 @@ def test_changed_old_health_rolls_back_before_certificate_request(tmp_path):
     with pytest.raises(RuntimeError,match='old_health_changed'):
         m.install(p,authorized=True,expected_sha256=hashlib.sha256(ORIGINAL).hexdigest(),run=run,probe=probe)
     assert p.config.read_bytes()==ORIGINAL and not any('certonly' in call for call in run.calls)
+
+
+def test_certbot_top_level_0755_does_not_relax_private_children(tmp_path):
+    m=load('configure_ip_tls');root=tmp_path/'ca-config'
+    root.mkdir(mode=0o700);private=root/'accounts';private.mkdir(mode=0o700)
+    secret=private/'synthetic-private-key';secret.write_bytes(b'synthetic-do-not-publish')
+    original_child_mode=stat.S_IMODE(private.stat().st_mode)
+    m.prepare_certbot_directory(root)
+    assert root.is_dir() and secret.read_bytes()==b'synthetic-do-not-publish'
+    assert stat.S_IMODE(private.stat().st_mode)==original_child_mode
+    if os.name=='posix':assert stat.S_IMODE(root.stat().st_mode)==0o755

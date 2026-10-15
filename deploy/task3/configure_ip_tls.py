@@ -76,6 +76,13 @@ def certbot_common(paths):
         '--non-interactive','--strict-permissions','--cert-name',CERT_NAME]
 
 
+def prepare_certbot_directory(path):
+    # Certbot --strict-permissions checks this TOP directory for exactly 0755.
+    # It creates accounts/archive/live as 0700 itself; never chmod recursively.
+    path.mkdir(parents=True,exist_ok=True,mode=0o755)
+    os.chmod(path,0o755)
+
+
 def install(paths,*,authorized,expected_sha256,run,probe):
     if not authorized:raise ValueError('ca_agreement_and_ip_publication_authorization_required')
     for value in vars(paths).values():safe_path(value)
@@ -91,7 +98,7 @@ def install(paths,*,authorized,expected_sha256,run,probe):
     attempt=paths.state/('attempt-'+uuid.uuid4().hex);attempt.mkdir(mode=0o700)
     atomic_write(attempt/'nginx.before',original,mode)
     paths.webroot.mkdir(parents=True,exist_ok=True,mode=0o755)
-    paths.cert_config.mkdir(parents=True,exist_ok=True,mode=0o700)
+    prepare_certbot_directory(paths.cert_config)
     hook=paths.cert_config/'reload-nginx.sh'
     if hook.exists():
         safe_path(hook)

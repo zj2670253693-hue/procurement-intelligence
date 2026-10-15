@@ -28,7 +28,7 @@
 
 `deploy/task3/configure_ip_tls.py` 由管理员显式执行，需同时提供 `--apply --accept-ca-agreement-and-public-ip --ip-address <公网IPv4> --expected-host <hostname输出> --expected-nginx-sha256 <旧站点文件SHA256>`。操作者必须先同意 [Let's Encrypt 订户协议](https://letsencrypt.org/repository/) 和证书公开记录 IP。不在仓库保存实际主机名、部署 IP、证书或账户私钥。
 
-脚本限定 root、Ubuntu24.04、预期主机和旧 Nginx 文件哈希；不读取应用环境、不碰数据库、不切换 current、不启用任务三。保留 HTTP 原有路径，用独立 webroot 完成验证；在独立 `/opt/procurement-certbot58` 安装 Certbot5.8.0（不改应用 venv），先 staging dry-run 再签正式证书。独立 `/etc/letsencrypt-procurement` 保存证书/账户，私钥不出服务器。签发后检查 CA 信任链、IP SAN、剩余有效期及旧健康计数，再做一次带 reload hook 的续期 dry-run。
+脚本限定 root、Ubuntu24.04、预期主机和旧 Nginx 文件哈希；不读取应用环境、不碰数据库、不切换 current、不启用任务三。保留 HTTP 原有路径，用独立 webroot 完成验证；在独立 `/opt/procurement-certbot58` 安装 Certbot5.8.0（不改应用 venv），先 staging dry-run 再签正式证书。独立 `/etc/letsencrypt-procurement` 保存证书/账户；其顶层按 Certbot `--strict-permissions` 要求为 root所有0755，内部 accounts/archive/live 由 Certbot 创建为0700，私钥不出服务器。不能递归 chmod755。签发后检查 CA 信任链、IP SAN、剩余有效期及旧健康计数，再做一次带 reload hook 的续期 dry-run。
 
 只有以上步骤成功才启用 `procurement-ip-renew.timer`，每6小时检查、最多随机延迟30分钟，开机补执行；Certbot 仅在需要时续期，成功后 `nginx -t && systemctl reload nginx`。约6天的证书依赖该定时器；后续应检查 `systemctl list-timers procurement-ip-renew.timer` 与 `journalctl -u procurement-ip-renew.service`，不能以“定时器 active”冒充未来续期已成功。无邮箱注册不提供邮件告警，故运行告警仍需另配。
 
