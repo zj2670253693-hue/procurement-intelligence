@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildGraphLayout, NODE } from '../src/services/graphLayout.js'
+import { buildGraphLayout, coalesceGraph, NODE } from '../src/services/graphLayout.js'
 
 // Mirrors the shape the API returns for one announcement: project -> packages ->
 // bidders (some shared across packages) -> individual subjects.
@@ -172,6 +172,33 @@ test('chips never overlap each other, even from different sources', () => {
       const vertical = Math.abs(a.labelY - b.labelY) < (a.labelHeight + b.labelHeight) / 2
       assert.ok(!(horizontal && vertical), a.id + ' chip overlaps ' + b.id)
     }
+  }
+})
+test('nodes a reader cannot tell apart are merged, evidence preserved', () => {
+  // The official data returns several distinct '合同包1' ids for one buyer.
+  const repeated = {
+    nodes: [{ id: 'e1', kind: 'event', label: '合同包1', evidence_ids: ['a'] },
+            { id: 'e2', kind: 'event', label: '合同包1', evidence_ids: ['b'] },
+            { id: 'e3', kind: 'event', label: '合同包2', evidence_ids: ['c'] },
+            { id: 'w', kind: 'bid_subject', label: '某公司', evidence_ids: ['d'] }],
+    edges: [{ id: 'x', from: 'e1', to: 'w', kind: 'awarded_to', evidence_ids: ['a1'] },
+            { id: 'y', from: 'e2', to: 'w', kind: 'awarded_to', evidence_ids: ['a2'] },
+            { id: 'z', from: 'e3', to: 'w', kind: 'awarded_to', evidence_ids: ['a3'] }],
+  }
+  const merged = coalesceGraph(repeated)
+  assert.equal(merged.nodes.length, 3, 'the two identical 合同包1 nodes become one')
+  assert.equal(merged.merged, 1)
+  const packages = merged.nodes.filter(node => node.label === '合同包1')
+  assert.equal(packages.length, 1)
+  assert.deepEqual([...packages[0].evidence_ids].sort(), ['a', 'b'])
+  assert.equal(merged.edges.length, 2, 'parallel identical edges collapse to one')
+  const winnerEdge = merged.edges.find(edge => edge.from === packages[0].id)
+  assert.deepEqual([...winnerEdge.evidence_ids].sort(), ['a1', 'a2'])
+  const layout = buildGraphLayout({ ...merged, kindLabels: KIND_LABELS })
+  assert.equal(layout.edges.length, 2)
+  for (const edge of layout.edges) {
+    assert.notEqual(edge.startX, edge.endX, 'a merged edge still spans real distance')
+    assert.ok(edge.midX > edge.startX && edge.midX < edge.endX)
   }
 })
 test('layout is deterministic and empty input is safe', () => {

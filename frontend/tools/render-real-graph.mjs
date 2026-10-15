@@ -3,7 +3,7 @@
  * so layout changes are checked against the data the user actually sees.
  */
 import { readFileSync, writeFileSync } from 'node:fs'
-import { buildGraphLayout, edgePath, NODE } from '../src/services/graphLayout.js'
+import { buildGraphLayout, coalesceGraph, edgePath, NODE } from '../src/services/graphLayout.js'
 
 const KIND_LABELS = {
   procured_by: '采购单位', package_of: '所属项目', individual_subject: '法人主体',
@@ -20,7 +20,7 @@ if (!sample) {
   console.error('no graph for ' + wanted)
   process.exit(1)
 }
-const graph = sample.graph
+const graph = coalesceGraph(sample.graph)  // same merge the view performs
 const layout = buildGraphLayout({ nodes: graph.nodes, edges: graph.edges, kindLabels: KIND_LABELS })
 const escape = (text) => String(text).replace(/[&<>]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[character]))
 

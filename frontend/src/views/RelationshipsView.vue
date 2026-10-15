@@ -82,7 +82,7 @@
 import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 import { useDataset } from '../services/useDataset'
 import { createRenderMeasurement } from '../services/renderMeasurement'
-import { buildGraphLayout, edgePath } from '../services/graphLayout'
+import { buildGraphLayout, coalesceGraph, edgePath } from '../services/graphLayout'
 const {datasetId,context}=useDataset()
 const root=ref(null),lastSample=ref(null)
 const meter=createRenderMeasurement({nextTick,nextFrame:()=>new Promise(resolve=>requestAnimationFrame(resolve)),isReady:()=>Boolean(root.value?.querySelector('.el-table') && root.value?.querySelector('.el-pagination') && root.value?.querySelector('.graph-scroll') && (!nodes.value.length || root.value.querySelector('.graph-scroll svg')))})
@@ -111,11 +111,12 @@ let evidenceGeneration=0,evidenceVersion=''
 function rowEvidence(row){const ids=new Set(row.evidence_ids||[]);Object.values(row.by_supplier||{}).forEach(x=>(x.evidence_ids||[]).forEach(id=>ids.add(id)));openEvidence([...ids])}
 function openEvidence(ids){if(!ids?.length){ElMessage.info('这条记录没有可显示的证据');return}evidenceVersion=result.value.dataset_id;evidenceScope=resultScope;evidenceIds.value=ids;selectedEvidence.value=ids[0];drawer.value=true;readEvidence()}
 async function readEvidence(){const token=++evidenceGeneration,ticket=context.ticket();evidence.value=null;evidenceLoading.value=true;try{const value=await sourceEvidence(selectedEvidence.value,evidenceVersion,evidenceScope);if(token===evidenceGeneration && context.accept(ticket))evidence.value=value}catch(e){if(token===evidenceGeneration && context.accept(ticket))ElMessage.error(e.message)}finally{if(token===evidenceGeneration && context.accept(ticket))evidenceLoading.value=false}}
-const nodes=computed(()=>result.value?.graph.nodes||[])
+const coalesced=computed(()=>coalesceGraph({nodes:result.value?.graph.nodes||[],edges:result.value?.graph.edges||[]}))
+const nodes=computed(()=>coalesced.value.nodes)
 const colors={project:'#d9eafa',event:'#dff2e6',bid_subject:'#ffebcc',organization:'#e9e1f4'}
 const edgeLabels=k=>({procured_by:'采购单位',package_of:'所属项目',individual_subject:'法人主体',consortium_member:'联合体成员',awarded_to:'中标',product_supplier:'明示产品供应商',award_only_won:'仅中标证据',bid_participation_won:'竞标·中标',bid_participation_lost:'竞标·未中标',bid_participation_unknown:'竞标·结果未知'}[k]||k)
 const kindLabels=Object.fromEntries(Object.keys({procured_by:1,package_of:1,individual_subject:1,consortium_member:1,awarded_to:1,product_supplier:1,award_only_won:1,bid_participation_won:1,bid_participation_lost:1,bid_participation_unknown:1}).map(k=>[k,edgeLabels(k)]))
-const layout=computed(()=>buildGraphLayout({nodes:nodes.value,edges:result.value?.graph.edges||[],kindLabels}))
+const layout=computed(()=>buildGraphLayout({nodes:coalesced.value.nodes,edges:coalesced.value.edges,kindLabels}))
 const pathOf=edge=>edgePath(edge)
 watch(datasetId,async id=>{context.select(id);meter.cancel(generation);generation++;choiceGeneration++;evidenceGeneration++;result.value=null;status.value=null;choices.value=[];selector.value='';selectors.value=[];drawer.value=false;evidence.value=null;evidenceIds.value=[];selectedEvidence.value='';lastSample.value=null;page.value=1;secondaryPage.value=1;error.value='';loading.value=true;const ticket=context.ticket();try{const value=await task2Status(id);if(!context.accept(ticket))return;status.value=value;await loadChoices('')}catch(e){if(context.accept(ticket))error.value=e.message}finally{if(context.accept(ticket))loading.value=false}},{immediate:true})
 onUnmounted(()=>{meter.cancel(generation);generation++;choiceGeneration++;evidenceGeneration++})

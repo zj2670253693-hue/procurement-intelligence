@@ -82,6 +82,49 @@ const rankNodes = (nodes, edges) => {
   return rank
 }
 
+/**
+ * Merge nodes that a reader cannot tell apart (same kind AND same label, different
+ * ids). The official data really does return several distinct "合同包1" nodes for one
+ * buyer; drawing one box per id produced a repeated-label column that looked broken.
+ * Edge evidence is preserved by unioning evidence_ids.
+ */
+export function coalesceGraph(graph = {}) {
+  const nodes = Array.isArray(graph.nodes) ? graph.nodes : []
+  const edges = Array.isArray(graph.edges) ? graph.edges : []
+  const memberOf = new Map()
+  const merged = new Map()
+  for (const node of nodes) {
+    const key = node.kind + '\u0000' + node.label
+    const first = merged.get(key)
+    if (!first) {
+      const copy = { ...node, evidence_ids: [...(node.evidence_ids || [])] }
+      merged.set(key, copy)
+      memberOf.set(node.id, copy.id)
+    } else {
+      first.evidence_ids = [...new Set([...first.evidence_ids, ...(node.evidence_ids || [])])]
+      memberOf.set(node.id, first.id)
+    }
+  }
+  const byKey = new Map()
+  const mergedEdges = []
+  for (const edge of edges) {
+    const from = memberOf.get(edge.from)
+    const to = memberOf.get(edge.to)
+    if (!from || !to) continue
+    const key = from + '>' + to + '|' + edge.kind
+    const existing = byKey.get(key)
+    if (existing) {
+      existing.evidence_ids = [...new Set([...existing.evidence_ids, ...(edge.evidence_ids || [])])]
+      continue
+    }
+    const copy = { ...edge, id: key, from, to, evidence_ids: [...(edge.evidence_ids || [])] }
+    byKey.set(key, copy)
+    mergedEdges.push(copy)
+  }
+  return { nodes: [...merged.values()], edges: mergedEdges, truncated: graph.truncated,
+           merged: nodes.length - merged.size }
+}
+
 export function buildGraphLayout(graph = {}) {
   const nodes = Array.isArray(graph.nodes) ? graph.nodes : []
   const rawEdges = Array.isArray(graph.edges) ? graph.edges : []
@@ -106,9 +149,11 @@ export function buildGraphLayout(graph = {}) {
   const widestChip = Math.max(0, ...edges.map(edge => measureChip(kindText(edge.kind)).width))
   // Gutter layout, left to right: [vertical lanes][gap][chip][clearance]. Reserving a
   // FULL chip width is what stops long labels from being clipped by the next column.
-  const laneSpan = 18
+  const laneCount = Math.max(1, ...[...new Set(edges.map(edge => (rank.get(edge.from) || 0) + '->' + (rank.get(edge.to) || 0)))]
+    .map(key => edges.filter(edge => (rank.get(edge.from) || 0) + '->' + (rank.get(edge.to) || 0) === key).length))
+  const laneSpan = Math.min(48, 12 + laneCount * 8)
   const chipGap = 6
-  const clearance = 6
+  const clearance = 12
   const gutter = NODE.gapX + laneSpan + chipGap + widestChip + clearance
 
   // Column x offsets: each column is as wide as its widest box.
@@ -185,9 +230,10 @@ export function buildGraphLayout(graph = {}) {
     let midX
     if (forward && toColumn > fromColumn) {
       const gutterStart = columnX.get(fromColumn) + columnWidths.get(fromColumn) / 2
-      midX = gutterStart + 9 + Math.min(lane, 4) * 4
+      const spread = Math.min(4, laneCount > 1 ? (laneSpan - 12) / (laneCount - 1) : 0)
+      midX = gutterStart + 8 + lane * spread
     } else {
-      midX = startX + 16 + Math.min(lane, 4) * 4
+      midX = startX + 18 + Math.min(lane, 3) * 6
     }
     // The chip hugs the target box: its right edge is the inner boundary of the
     // gutter, so it can never be clipped, and the vertical run sits to its left.
