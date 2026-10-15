@@ -69,10 +69,25 @@ const router = createRouter({
   routes,
 })
 
-router.beforeEach((to,from)=>{
+router.beforeEach(async (to,from)=>{
   const value=to.query.dataset_id
   if(value && !(/^up_[a-f0-9]{32}$/.test(String(value)) || value==='official')) return {path:'/task3',query:{error:'invalid-dataset'}}
   if(!value && from.query.dataset_id && to.path!=='/login') return {path:to.path,query:{...to.query,dataset_id:from.query.dataset_id},hash:to.hash}
+  // Guarded pages need a live session first. Without this a user can sit on the
+  // upload page, watch the progress bar reach 100%, and never notice that every
+  // request was rejected with 401 and no task reached the server.
+  if(to.path==='/login' || to.meta?.public===true) return true
+  try {
+    const {session}=await import('../api/auth')
+    await session()
+    return true
+  } catch (error) {
+    if(error?.status===401 || error?.code==='session_required' || error?.expired){
+      return {path:'/login',query:{next:to.fullPath,reason:'expired'}}
+    }
+    // Backend unreachable: let the page surface the connection error itself.
+    return true
+  }
 })
 router.afterEach((to) => {
   document.title = to.meta?.title
