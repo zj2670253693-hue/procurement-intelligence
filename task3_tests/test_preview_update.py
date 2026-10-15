@@ -70,3 +70,19 @@ def test_official_fingerprint_connection_is_actually_streaming(monkeypatch):
     m.connect({'DB_HOST':'127.0.0.1','DB_USER':'synthetic','DB_PASSWORD':'synthetic-placeholder'},
         'synthetic_official',streaming=True)
     assert calls[0]['cursorclass'] is SSDictCursor
+
+
+def test_only_explicitly_audited_old_ledger_drift_is_accepted_not_new_release_tampering(tmp_path):
+    m=load('update_preview');root=tmp_path/'old';file=root/'backend/task3_platform/ledger.py'
+    file.parent.mkdir(parents=True);file.write_bytes(b'original synthetic ledger')
+    manifest=root/'release-manifest.json'
+    manifest.write_text(json.dumps({'kind':'task3_isolated_preview_release','files':{
+        'backend/task3_platform/ledger.py':hashlib.sha256(file.read_bytes()).hexdigest()}}))
+    expected=hashlib.sha256(manifest.read_bytes()).hexdigest()
+    file.write_bytes(b'prior operator synthetic diagnostic draft')
+    actual=hashlib.sha256(file.read_bytes()).hexdigest()
+    with pytest.raises(ValueError):m.verify_release(root,expected)
+    assert m.verify_release(root,expected,audited_old_overrides={'backend/task3_platform/ledger.py':actual})
+    with pytest.raises(ValueError):m.verify_release(root,expected,audited_old_overrides={'backend/api/main.py':actual})
+    with pytest.raises(ValueError):m.verify_release(root,expected,audited_old_overrides={'backend/task3_platform/ledger.py':'0'*64})
+    assert hashlib.sha256(manifest.read_bytes()).hexdigest()==expected

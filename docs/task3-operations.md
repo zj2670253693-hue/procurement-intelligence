@@ -118,6 +118,8 @@ sudo /srv/procurement-app/shared/venv/bin/python -B deploy/task3/install_preview
 
 对已经安装的独立预览，可用 `update_preview.py --apply --plan <私有计划JSON> --plan-sha256 <已核对SHA>` 进行**预览更新**。仅root在预期主机执行，验证新旧release全部声明文件、两个unit/env/Nginx的预期SHA、共享原文SHA及无活动任务/不确定请求；在私有目录备份后只替换预览unit的WorkingDirectory、HTTPS静态root，并添加只读原文根。付费策略、密钥、预算、旧HTTP、旧env/current/DB均不变。真实九表指纹前后核对；失败尝试恢复全部配置并检查服务，明确报告回滚不完整，不删任何发布或数据。此工具不代表正式发布验收，管理员运行后仍需真实浏览器复验。
 
+若旧预览清单与现状不符，默认拒绝。本次独立审计确认仅旧 `backend/task3_platform/ledger.py` 与先前保留的操作员诊断草稿逐字哈希一致；可在已核对SHA的私有计划中单独声明该旧文件当前SHA。工具只接受这一条明确路径的旧版例外，其余旧文件和全部新文件仍严格核对；不重签旧清单、不放行未知差异、不允许新发布使用例外。应在报告中保留该差异，不能宣传旧预览从未被修改。
+
 
 所有实际验收与全分支独立审查修复完成后，才制作管理员切换脚本：冻结新包清单和各文件哈希；对旧任务一五表及任务二事实/证据/版本做完整前后指纹；保留旧 env、旧 release、旧 runtime、旧数据库；原子替换新环境和 current 链接。新环境保留旧 DB_NAME/TASK2_DATASET_ID，只新增 TASK3_* 配置，付费默认关闭。
 

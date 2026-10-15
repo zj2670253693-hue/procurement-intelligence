@@ -50,15 +50,23 @@ def release_paths(old,new):
     return Path(old),Path(new)
 
 
-def verify_release(root,expected):
+def verify_release(root,expected,*,audited_old_overrides=None):
     root=plain(root)
     if not re.fullmatch(r'[a-f0-9]{64}',expected or '') or digest(root/'release-manifest.json')!=expected:fail('release_manifest_changed')
     value=json.loads((root/'release-manifest.json').read_bytes())
     if value.get('kind')!='task3_isolated_preview_release' or not isinstance(value.get('files'),dict):fail('preview_manifest_required')
+    # One observed pre-existing operator draft, independently matched to its
+    # retained source file. Only the OLD release may use a plan-pinned exception;
+    # never reseal its original manifest or accept arbitrary drift/new-code changes.
+    overrides=audited_old_overrides if audited_old_overrides is not None else {}
+    if (not isinstance(overrides,dict) or set(overrides)-{'backend/task3_platform/ledger.py'}
+            or not set(overrides).issubset(value['files'])
+            or any(not isinstance(sha,str) or not re.fullmatch(r'[a-f0-9]{64}',sha) for sha in overrides.values())):
+        fail('unapproved_old_release_override')
     for name,sha in value['files'].items():
         path=PurePosixPath(name)
         if path.is_absolute() or '\\' in name or '..' in path.parts or path.as_posix()!=name:fail('unsafe_release_member')
-        if digest(root/path)!=sha:fail('release_file_changed')
+        if digest(root/path)!=overrides.get(name,sha):fail('release_file_changed')
     return value
 
 
@@ -163,7 +171,7 @@ def apply(plan):
     if execute(['hostname']).decode().strip()!=plan['expected_host']:fail('unexpected_host')
     old,new=release_paths(plan['old_release'],plan['new_release'])
     manifest=verify_release(new,plan['new_manifest_sha256'])
-    verify_release(old,plan['old_manifest_sha256'])
+    verify_release(old,plan['old_manifest_sha256'],audited_old_overrides=plan.get('old_file_overrides'))
     expected_current=Path('/srv/procurement-app/current').resolve(strict=True)
     if str(expected_current)!=plan['official_release']:fail('official_current_changed')
     snapshots={path:plain(path).read_bytes() for path in (*UNITS,ENV,SITE)}
@@ -213,6 +221,7 @@ def apply(plan):
         execute(['systemctl','is-active','--quiet','procurement-task3-preview-api','procurement-task3-preview-worker','nginx','mysql'])
         report={'passed':True,'rollback':False,'kind':'isolated_preview_update','release':str(new),
             'official_fingerprints_unchanged':True,'official_current_unchanged':True,'paid_policy_unchanged':True,
+            'audited_old_file_hashes':plan.get('old_file_overrides',{}),
             'public_trusted_tls_health':health,'backup_directory':str(backup),'model_calls_by_updater':0}
     except Exception as error:
         rollback=restore(snapshots,atomic,execute)
