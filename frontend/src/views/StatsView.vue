@@ -76,12 +76,14 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, watch, ref } from 'vue'
+import { useDataset } from '../services/useDataset'
+const {datasetId,context}=useDataset()
 import { ElMessage } from 'element-plus'
 import { downloadStandard } from '../api/task2'
 
 async function downloadStandardResult() {
-  try { await downloadStandard() } catch (error) { ElMessage.error(error.message) }
+  try { await downloadStandard(datasetId.value) } catch (error) { ElMessage.error(error.message) }
 }
 
 import { getStats } from '../api/task1'
@@ -144,16 +146,20 @@ function rateLabel(rate) {
   return '需重点优化'
 }
 
-onMounted(async () => {
+watch(datasetId,async (id) => {
+  context.select(id)
+  const ticket=context.ticket()
+  stats.value={};error.value=''
   loading.value = true
   try {
-    stats.value = await getStats()
+    const value=await getStats(id)
+    if(context.accept(ticket,value))stats.value=value
   } catch (e) {
-    error.value = e.message
+    if(context.accept(ticket))error.value=e.message
   } finally {
-    loading.value = false
+    if(context.accept(ticket))loading.value=false
   }
-})
+},{immediate:true})
 </script>
 
 <style scoped>

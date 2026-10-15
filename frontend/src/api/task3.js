@@ -19,10 +19,18 @@ export function uploadDataset(formData, onUploadProgress) {
 
 /** 查询单个任务的进度 */
 export function getTask(taskId) {
-  return client.get(`/tasks/${taskId}`)
+  return client.get(`/platform/tasks/${taskId}`)
 }
 
 /** 任务列表 */
 export function listTasks() {
-  return client.get('/tasks')
+  return client.get('/platform/tasks')
 }
+export const listDatasets=()=>client.get('/platform/datasets')
+export const capabilities=()=>client.get('/platform/capabilities')
+export const beginUpload=body=>client.post('/platform/uploads',body)
+export const resumeUpload=id=>client.get(`/platform/uploads/${id}`)
+export const sendPart=(task,id,part,blob,signal)=>client.put(`/platform/uploads/${task}/files/${id}/parts/${part}`,blob,{headers:{'Content-Type':'application/octet-stream'},signal,timeout:120000})
+export const completeUpload=(id,signal)=>client.post(`/platform/uploads/${id}/complete`,{}, {signal,timeout:180000})
+export const cancelTask=id=>client.post(`/platform/tasks/${id}/cancel`)
+export const retryTask=id=>client.post(`/platform/tasks/${id}/retry`)

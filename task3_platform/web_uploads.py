@@ -15,15 +15,15 @@ async def bounded_body(request, limit):
     return bytes(result)
 
 
-async def json_body(request):
-    value = strict_json_loads(await bounded_body(request, 64*1024))
+async def json_body(request,limit=64*1024):
+    value = strict_json_loads(await bounded_body(request, limit))
     if not isinstance(value, dict):
         raise PlatformError("invalid_request_object")
     return value
 
 
-def upload_dto(session):
-    return {"job": asdict(session.job), "files": [asdict(file) for file in session.files]}
+def upload_dto(session,chunk_bytes):
+    return {"job": asdict(session.job), "files": [asdict(file) for file in session.files],"chunk_bytes":chunk_bytes}
 
 
 def request_spec(body, services):
@@ -42,13 +42,19 @@ def request_spec(body, services):
 
 def router(provider):
     api = APIRouter(prefix="/api/platform")
+    @api.get("/capabilities")
+    def capabilities(services=Depends(provider)):
+        limits=services.jobs.limits
+        return {"chunk_bytes":limits.chunk_bytes,"file_bytes":limits.file_bytes,"received_bytes":limits.received_bytes,
+                "announcements":limits.announcements,"paid_inference_ready":services.uploads.extract_authorizer is not None,
+                "secure_transport":services.secure,"public_demo":services.guest_actor is not None}
     @api.post("/uploads")
     async def begin(request: Request, services=Depends(provider)):
         actor = services.actor(request, mutation=True, guest=True)
-        body = await json_body(request)
+        body = await json_body(request,min(2*1024**2,services.jobs.limits.request_bytes))
         key = body.get("request_key")
         if not isinstance(key,str): raise PlatformError("invalid_request_key")
-        return upload_dto(services.uploads.begin(actor, request_spec(body,services), key))
+        return {**upload_dto(services.uploads.begin(actor, request_spec(body,services), key),services.jobs.limits.chunk_bytes),"request_key":key}
     @api.get("/uploads/{task_id}")
     def resume(task_id: str, request: Request, services=Depends(provider)):
         actor=services.actor(request,guest=True)
@@ -58,7 +64,7 @@ def router(provider):
         body=strict_json_loads(row["spec_json"])
         body["request_key"]=row["request_key"]
         # Idempotent server manifest; begin returns existing verified part numbers.
-        return upload_dto(services.uploads.begin(actor,request_spec({key:body[key] for key in ("files","mode","budget") if key in body},services),row["request_key"]))
+        return {**upload_dto(services.uploads.begin(actor,request_spec({key:body[key] for key in ("files","mode","budget") if key in body},services),row["request_key"]),services.jobs.limits.chunk_bytes),"request_key":row["request_key"]}
     @api.put("/uploads/{task_id}/files/{file_id}/parts/{part_no}")
     async def part(task_id: str,file_id: str,part_no: int,request: Request,services=Depends(provider)):
         actor=services.actor(request,mutation=True,guest=True)

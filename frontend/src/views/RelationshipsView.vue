@@ -1,5 +1,6 @@
 <template>
-  <div v-loading="loading">
+  <div ref="root" v-loading="loading" data-query-render-root>
+    <p v-if="lastSample" class="version-text">本次完整渲染：{{ lastSample.elapsed_ms.toFixed(1) }} ms（包含表格、分页和关系图；不是纯API耗时）</p>
     <el-alert title="口径说明：按原文完整名称检索，不代表跨公告法人合并。原文记录数、已去重交易次数分别显示；未确认身份、金额或投标名单完整性时保留未知，不填0。" type="info" :closable="false" show-icon />
     <el-alert v-if="error" :title="error" type="error" show-icon :closable="false" class="mt-16" />
     <el-card class="mt-16" shadow="never">
@@ -73,7 +74,13 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
+import { useDataset } from '../services/useDataset'
+import { createRenderMeasurement } from '../services/renderMeasurement'
+const {datasetId,context}=useDataset()
+const root=ref(null),lastSample=ref(null)
+const meter=createRenderMeasurement({nextTick,nextFrame:()=>new Promise(resolve=>requestAnimationFrame(resolve)),isReady:()=>Boolean(root.value?.querySelector('.el-table') && root.value?.querySelector('.el-pagination') && root.value?.querySelector('.graph-scroll') && (!nodes.value.length || root.value.querySelector('.graph-scroll svg')))})
+let resultScope='official',evidenceScope='official'
 import { ElMessage } from 'element-plus'
 import { task2Status, organizationChoices, relationshipQuery, sourceEvidence } from '../api/task2'
 const scenarios=[
@@ -89,21 +96,22 @@ let generation=0,choiceGeneration=0
 const secondaryPage=ref(1)
 const display=v=>v === null || v === undefined ? '未知/未确认' : v
 const outcomes={won:'中标',lost:'明确未中标',unknown:'未知',mixed:'多个包结果不同'}
-async function loadChoices(term='') { const token=++choiceGeneration;choicesLoading.value=true;try {const data=await organizationChoices({role:buyerMode.value?'buyer':'winner',term,dataset_id:status.value?.dataset_id});if(token===choiceGeneration)choices.value=data.items} catch(e){if(token===choiceGeneration)ElMessage.error(e.message)}finally{if(token===choiceGeneration)choicesLoading.value=false} }
-async function changeScenario(){generation++;loading.value=false;result.value=null;selector.value='';selectors.value=[];page.value=1;secondaryPage.value=1;await loadChoices('')}
+async function loadChoices(term='') { const token=++choiceGeneration,ticket=context.ticket();choicesLoading.value=true;try {const data=await organizationChoices({role:buyerMode.value?'buyer':'winner',term,dataset_id:status.value?.dataset_id},ticket.dataset_id);if(token===choiceGeneration && context.accept(ticket))choices.value=data.items} catch(e){if(token===choiceGeneration && context.accept(ticket))ElMessage.error(e.message)}finally{if(token===choiceGeneration && context.accept(ticket))choicesLoading.value=false} }
+async function changeScenario(){meter.cancel(generation);generation++;evidenceGeneration++;drawer.value=false;evidence.value=null;lastSample.value=null;loading.value=false;result.value=null;selector.value='';selectors.value=[];page.value=1;secondaryPage.value=1;await loadChoices('')}
 function search(){page.value=1;secondaryPage.value=1;run()}
-async function run(){const token=++generation;loading.value=true;error.value='';try{const data=await relationshipQuery({query_type:type.value,selector:selector.value,selectors:selectors.value,scope_level:scopeLevel.value,dataset_id:status.value.dataset_id,page:page.value,page_size:pageSize,secondary_page:secondaryPage.value,secondary_page_size:pageSize});if(token===generation)result.value=data}catch(e){if(token===generation)error.value=e.message}finally{if(token===generation)loading.value=false}}
+async function run(){const token=++generation,ticket=context.ticket();loading.value=true;error.value='';lastSample.value=null;meter.start(token,{dataset_id:ticket.dataset_id,query_type:type.value});try{const data=await relationshipQuery({query_type:type.value,selector:selector.value,selectors:selectors.value,scope_level:scopeLevel.value,dataset_id:status.value.dataset_id,page:page.value,page_size:pageSize,secondary_page:secondaryPage.value,secondary_page_size:pageSize},ticket.dataset_id);if(token!==generation || !context.accept(ticket))return;result.value=data;resultScope=ticket.dataset_id;loading.value=false;const sample=await meter.finish(token);if(sample && token===generation && context.accept(ticket)){lastSample.value=sample;globalThis.__t3RenderSamples=[...(globalThis.__t3RenderSamples||[]),sample].slice(-200)}}catch(e){meter.cancel(token);if(token===generation && context.accept(ticket))error.value=e.message}finally{if(token===generation && context.accept(ticket))loading.value=false}}
 const drawer=ref(false),evidenceIds=ref([]),selectedEvidence=ref(''),evidence=ref(null),evidenceLoading=ref(false)
 let evidenceGeneration=0,evidenceVersion=''
 function rowEvidence(row){const ids=new Set(row.evidence_ids||[]);Object.values(row.by_supplier||{}).forEach(x=>(x.evidence_ids||[]).forEach(id=>ids.add(id)));openEvidence([...ids])}
-function openEvidence(ids){if(!ids?.length){ElMessage.info('这条记录没有可显示的证据');return}evidenceVersion=result.value.dataset_id;evidenceIds.value=ids;selectedEvidence.value=ids[0];drawer.value=true;readEvidence()}
-async function readEvidence(){const token=++evidenceGeneration;evidence.value=null;evidenceLoading.value=true;try{const value=await sourceEvidence(selectedEvidence.value,evidenceVersion);if(token===evidenceGeneration)evidence.value=value}catch(e){if(token===evidenceGeneration)ElMessage.error(e.message)}finally{if(token===evidenceGeneration)evidenceLoading.value=false}}
+function openEvidence(ids){if(!ids?.length){ElMessage.info('这条记录没有可显示的证据');return}evidenceVersion=result.value.dataset_id;evidenceScope=resultScope;evidenceIds.value=ids;selectedEvidence.value=ids[0];drawer.value=true;readEvidence()}
+async function readEvidence(){const token=++evidenceGeneration,ticket=context.ticket();evidence.value=null;evidenceLoading.value=true;try{const value=await sourceEvidence(selectedEvidence.value,evidenceVersion,evidenceScope);if(token===evidenceGeneration && context.accept(ticket))evidence.value=value}catch(e){if(token===evidenceGeneration && context.accept(ticket))ElMessage.error(e.message)}finally{if(token===evidenceGeneration && context.accept(ticket))evidenceLoading.value=false}}
 const nodes=computed(()=>result.value?.graph.nodes||[])
 const colors={project:'#d9eafa',event:'#dff2e6',bid_subject:'#ffebcc',organization:'#e9e1f4'}
 const positions=computed(()=>{const pos={},counts={};const columns={project:145,event:415,bid_subject:685,organization:955};nodes.value.forEach(n=>{const i=counts[n.kind]||0;pos[n.id]={x:columns[n.kind]||145,y:50+i*65};counts[n.kind]=i+1});return pos})
 const graphHeight=computed(()=>Math.max(220,...Object.values(positions.value).map(p=>p.y+40)))
 const edgeLabels=k=>({procured_by:'采购单位',package_of:'所属项目',individual_subject:'法人主体',consortium_member:'联合体成员',awarded_to:'中标',product_supplier:'明示产品供应商',award_only_won:'仅中标证据',bid_participation_won:'竞标·中标',bid_participation_lost:'竞标·未中标',bid_participation_unknown:'竞标·结果未知'}[k]||k)
-onMounted(async()=>{loading.value=true;try{status.value=await task2Status();await loadChoices('')}catch(e){error.value=e.message}finally{loading.value=false}})
+watch(datasetId,async id=>{context.select(id);meter.cancel(generation);generation++;choiceGeneration++;evidenceGeneration++;result.value=null;status.value=null;choices.value=[];selector.value='';selectors.value=[];drawer.value=false;evidence.value=null;evidenceIds.value=[];selectedEvidence.value='';lastSample.value=null;page.value=1;secondaryPage.value=1;error.value='';loading.value=true;const ticket=context.ticket();try{const value=await task2Status(id);if(!context.accept(ticket))return;status.value=value;await loadChoices('')}catch(e){if(context.accept(ticket))error.value=e.message}finally{if(context.accept(ticket))loading.value=false}},{immediate:true})
+onUnmounted(()=>{meter.cancel(generation);generation++;choiceGeneration++;evidenceGeneration++})
 </script>
 
 <style scoped>

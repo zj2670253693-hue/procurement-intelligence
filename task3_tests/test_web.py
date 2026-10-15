@@ -137,3 +137,13 @@ def test_forged_source_query_has_no_sql_or_file_side_effect(web_case):
     response=client.get(f"/api/platform/datasets/{job.upload_dataset_id}/announcements/not-an-id")
     assert response.status_code==400
     assert not any("DELETE" in sql or "UPDATE" in sql for sql,_ in connection.statements[before:])
+
+
+def test_server_capabilities_and_exact_decimal_range_string(web_case):
+    import json
+    client,_,job,_=web_case
+    value=client.get('/api/platform/capabilities').json()
+    assert value['chunk_bytes']==16*1024**2 and value['paid_inference_ready'] is False
+    filters={"ranges":{"unit_price":["1.23000000","1.23000000"]}}
+    response=client.get(f'/api/platform/datasets/{job.upload_dataset_id}/entities',params={"filters":json.dumps(filters)})
+    assert response.status_code==200 and response.json()['total']==1

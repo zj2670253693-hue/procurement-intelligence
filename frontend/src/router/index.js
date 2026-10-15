@@ -9,6 +9,7 @@ import MainLayout from '../layouts/MainLayout.vue'
  *   任务三 可视化分析检索平台     -> 已实现数据集上传
  */
 const routes = [
+  {path:'/login',component:()=>import('../views/LoginView.vue'),meta:{title:'平台账号登录'}},
   {
     path: '/',
     component: MainLayout,
@@ -68,6 +69,11 @@ const router = createRouter({
   routes,
 })
 
+router.beforeEach((to,from)=>{
+  const value=to.query.dataset_id
+  if(value && !(/^up_[a-f0-9]{32}$/.test(String(value)) || value==='official')) return {path:'/task3',query:{error:'invalid-dataset'}}
+  if(!value && from.query.dataset_id && to.path!=='/login') return {path:to.path,query:{...to.query,dataset_id:from.query.dataset_id},hash:to.hash}
+})
 router.afterEach((to) => {
   document.title = to.meta?.title
     ? `${to.meta.title} - 招采标讯智能分析引擎`

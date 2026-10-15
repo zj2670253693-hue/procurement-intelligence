@@ -67,12 +67,12 @@
           <div class="stat-chip">
             <el-icon class="chip-icon"><Files /></el-icon>
             <span class="chip-num">{{ health?.announcements ?? '—' }}</span>
-            <span class="chip-label">公告</span>
+            <span class="chip-label">官方公告</span>
           </div>
           <div class="stat-chip">
             <el-icon class="chip-icon"><Goods /></el-icon>
             <span class="chip-num">{{ health?.entities ?? '—' }}</span>
-            <span class="chip-label">标的物</span>
+            <span class="chip-label">官方标的物</span>
           </div>
           <div class="conn" :class="connected ? 'is-on' : 'is-off'">
             <span class="dot" />
@@ -83,6 +83,7 @@
 
       <el-main class="main">
         <div class="main-inner">
+          <DatasetSelector />
           <router-view />
         </div>
       </el-main>
@@ -95,6 +96,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 
 import { getHealth } from '../api/task1'
+import DatasetSelector from '../components/DatasetSelector.vue'
 
 const route = useRoute()
 const health = ref(null)

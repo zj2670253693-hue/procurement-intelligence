@@ -1,5 +1,6 @@
 <template>
   <div>
+    <el-alert v-if="loadError" :title="loadError" type="error" :closable="false" />
     <el-card shadow="never" class="toolbar-card">
       <div class="toolbar">
         <div class="toolbar-fields">
@@ -32,6 +33,18 @@
         </div>
       </div>
     </el-card>
+
+    <el-collapse><el-collapse-item title="七字段组合筛选（同一批次；金额范围单位：万元）">
+      <el-row :gutter="12"><el-col v-for="column in columns" :key="column.prop" :span="8">
+        <el-input v-model="fieldText[column.prop]" :placeholder="column.label + '包含'" clearable />
+        <el-select v-model="fieldMissing[column.prop]" clearable placeholder="缺失状态不限"><el-option label="未公示/空值" value="missing"/><el-option label="有明确内容" value="present"/></el-select>
+      </el-col></el-row>
+      <el-row :gutter="12"><el-col v-for="field in ['unit_price','quantity','total_price']" :key="field" :span="8">
+        <el-input v-model="rangeLow[field]" :placeholder="`${field} 下限（原精度）`"/><el-input v-model="rangeHigh[field]" placeholder="上限（原精度）"/>
+      </el-col></el-row>
+      <el-select v-model="quantityUnit" clearable placeholder="数量范围需明确单位"><el-option v-for="unit in quantityUnits" :key="unit" :label="unit" :value="unit"/></el-select>
+      <p>单位不明、预算、折扣和未知值只保留原文，不参与数值区间计算。</p>
+    </el-collapse-item></el-collapse>
 
     <el-card shadow="never" class="mt-16">
       <template #header>
@@ -200,7 +213,9 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { watch, reactive, ref } from 'vue'
+import { useDataset } from '../services/useDataset'
+const {datasetId,context}=useDataset()
 import { ElMessage } from 'element-plus'
 import { Close, RefreshLeft, Search, View } from '@element-plus/icons-vue'
 
@@ -232,6 +247,9 @@ const fieldOptions = [
 ]
 
 const loading = ref(false)
+const loadError=ref(''),fieldText=reactive({}),fieldMissing=reactive({}),rangeLow=reactive({}),rangeHigh=reactive({}),quantityUnit=ref('')
+const quantityUnits=['套','批','台','件','个','项','人天','吨','米','平方米','本','辆','张','份']
+let loadGeneration=0
 const rows = ref([])
 const total = ref(0)
 
@@ -263,22 +281,31 @@ const detailColumns = [{prop:'package_name',label:'采购包'}, ...columns, {pro
 let drawerGeneration = 0
 
 async function load() {
+  const ticket=context.ticket(),token=++loadGeneration
   loading.value = true
+  loadError.value=''
   try {
+    const filters={text:{},missing:{},ranges:{}}
+    for(const column of columns){if(fieldText[column.prop])filters.text[column.prop]=fieldText[column.prop];if(fieldMissing[column.prop])filters.missing[column.prop]=fieldMissing[column.prop]==='missing'}
+    if(query.field)filters.missing[query.field]=false
+    if(query.keyword)filters.text.product_name=query.keyword
+    for(const name of ['unit_price','quantity','total_price'])if(rangeLow[name] || rangeHigh[name])filters.ranges[name]=[rangeLow[name] || null,rangeHigh[name] || null]
+    if(quantityUnit.value)filters.quantity_unit=quantityUnit.value
+    const advanced=Object.keys(fieldText).some(key=>fieldText[key]) || Object.keys(fieldMissing).some(key=>fieldMissing[key]) || Object.keys(filters.ranges).length
     const data = await searchEntities({
       keyword: query.keyword,
       field: query.field,
       page: query.page,
       page_size: query.page_size,
-    })
+      filters:datasetId.value!=='official' || advanced?filters:undefined,
+    },ticket.dataset_id)
+    if(token!==loadGeneration || !context.accept(ticket,data))return
     rows.value = data.items
     total.value = data.total
   } catch (e) {
-    ElMessage.error(e.message)
-    rows.value = []
-    total.value = 0
+    if(token===loadGeneration && context.accept(ticket))loadError.value='刷新失败；下方可能是上次结果：'+e.message
   } finally {
-    loading.value = false
+    if(token===loadGeneration && context.accept(ticket))loading.value=false
   }
 }
 
@@ -288,6 +315,8 @@ function onSearch() {
 }
 
 function onReset() {
+  for(const value of [fieldText,fieldMissing,rangeLow,rangeHigh])for(const key of Object.keys(value))delete value[key]
+  quantityUnit.value=''
   query.keyword = ''
   query.field = ''
   query.page = 1
@@ -301,6 +330,7 @@ function onPageChange(page) {
 }
 
 async function openAnnouncement(id) {
+  const ticket=context.ticket()
   const token=++drawerGeneration
   drawer.visible = true
   drawer.tab = 'entities'
@@ -320,13 +350,13 @@ async function openAnnouncement(id) {
   try {
     // 标的物与公告原文并行取，原文失败不影响表格展示
     const [ents, ann, standard, notes, details] = await Promise.all([
-      getEntitiesByAnnouncement(id),
-      getAnnouncement(id).catch(() => null),
-      getStandardItems(id).catch(e => ({headers:[],items:[],error:e.message})),
-      getOfficialNotes(id).catch(e => ({error:e.message})),
-      getAttachmentDetails(id).catch(e => ({items:[],detail_error_message:e.message})),
+      getEntitiesByAnnouncement(id,ticket.dataset_id),
+      getAnnouncement(id,ticket.dataset_id).catch(() => null),
+      getStandardItems(id,ticket.dataset_id).catch(e => ({headers:[],items:[],error:e.message})),
+      getOfficialNotes(id,ticket.dataset_id).catch(e => ({error:e.message})),
+      getAttachmentDetails(id,ticket.dataset_id).catch(e => ({items:[],detail_error_message:e.message})),
     ])
-    if(token!==drawerGeneration)return
+    if(token!==drawerGeneration || !context.accept(ticket))return
     drawer.rows = ents.items
     announcement.value = ann
     standardItems.value=standard
@@ -340,14 +370,15 @@ async function openAnnouncement(id) {
 }
 
 async function onTabChange(name) {
+  const ticket=context.ticket()
   // 附件解析较慢，首次切到该页签时才加载
   if (name !== 'attachments' || drawer.attLoaded) return
   drawer.attLoaded = true
   drawer.attLoading = true
   const token=drawerGeneration
   try {
-    const data = await getAnnouncementAttachments(drawer.id)
-    if(token!==drawerGeneration)return
+    const data = await getAnnouncementAttachments(drawer.id,ticket.dataset_id)
+    if(token!==drawerGeneration || !context.accept(ticket,data))return
     attachmentItems.value = data.items || []
     drawer.attMessage = data.message || ''
   } catch (e) {
@@ -357,7 +388,7 @@ async function onTabChange(name) {
   }
 }
 
-onMounted(load)
+watch(datasetId,id=>{context.select(id);loadGeneration++;drawerGeneration++;drawer.visible=false;drawer.loading=false;drawer.attLoading=false;rows.value=[];total.value=0;announcement.value=null;attachmentItems.value=[];standardItems.value={headers:[],items:[]};officialNotes.value='';attachmentDetails.value={items:[]};query.page=1;load()},{immediate:true})
 </script>
 
 <style scoped>

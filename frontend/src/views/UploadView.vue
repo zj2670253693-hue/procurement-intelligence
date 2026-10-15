@@ -1,322 +1,71 @@
 <template>
   <div>
-    <el-card shadow="never">
-      <template #header>
-        <span>数据集上传与自动处理</span>
-        <span class="page-hint">支持 .html 公告与同名 .zip 附件，也可直接上传数据集整包 zip</span>
-      </template>
-
-      <el-upload
-        v-model:file-list="fileList"
-        drag
-        multiple
-        :auto-upload="false"
-        accept=".html,.htm,.zip"
-        class="dropzone"
-      >
-        <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
-        <div class="el-upload__text">拖拽文件到此处，或 <em>点击选择文件</em></div>
-        <template #tip>
-          <div class="el-upload__tip">
-            一篇公告 = 一个 .html + 一个同名 .zip（无附件可只传 .html）
-          </div>
-        </template>
-      </el-upload>
-
-      <div class="actions">
-        <el-checkbox v-model="runExtraction">
-          调用大模型提取标的物
-          <span class="page-hint">（关闭则仅解析，不消耗模型额度）</span>
-        </el-checkbox>
-
-        <div class="actions-btns">
-          <el-button type="primary" :icon="Upload" :loading="uploading" :disabled="!fileList.length" @click="submit">
-            开始处理
-          </el-button>
-          <el-button :icon="Delete" :disabled="uploading || !fileList.length" @click="fileList = []">
-            清空
-          </el-button>
-        </div>
-      </div>
+    <el-alert v-if="error" :title="error" type="error" :closable="false" />
+    <el-alert title="只解析不产生实体或交易结果。付费抽取需平台账号、服务器有限预算授权和已验证计数策略；不会使用旧Bearer令牌。" type="info" :closable="false" />
+    <el-alert v-if="caps.public_demo" title="匿名演示仅接受1篇不超过1MB的HTML；演示批次属于公开演示空间，不要上传私有资料。" type="warning" :closable="false" />
+    <el-card class="mt-16" shadow="never"><template #header>批量上传与断点恢复</template>
+      <el-upload v-model:file-list="fileList" drag multiple :auto-upload="false" accept=".html,.htm,.zip" :disabled="uploading"><el-icon class="el-icon--upload"><UploadFilled/></el-icon><div>选择HTML和同名ZIP，或规范整包ZIP；单文件最多{{ Math.floor((caps.file_bytes||0)/1024**3) }}GiB</div></el-upload>
+      <p>刷新后需重新选择原始文件；服务器会校验相同清单并跳过已确认分片。页面不保存文件正文、密码或API密钥。</p>
+      <el-checkbox v-model="runExtraction" :disabled="!caps.paid_inference_ready || uploading">使用已获服务器有限授权的大模型抽取（可能计费）</el-checkbox>
+      <div v-if="runExtraction"><el-input-number v-model="budget.max_calls" :min="1" :max="8"/><el-input-number v-model="budget.max_input_tokens" :min="1" :max="64000"/><el-input-number v-model="budget.max_output_tokens" :min="1" :max="32768"/><p>调用数／输入token／输出token有限上限；实际许可仍由服务器决定。</p></div>
+      <p>{{ uploadPhase }}</p><el-progress :percentage="uploadPercent"/>
+      <el-button type="primary" :loading="uploading" :disabled="!fileList.length" @click="submit">{{ receiving ? '恢复上传' : '校验并上传' }}</el-button>
+      <el-button v-if="uploading" @click="controller?.abort()">停止本地上传</el-button><el-button v-if="!uploading" @click="newBatch">另建批次</el-button>
     </el-card>
-
-    <el-card v-if="task" shadow="never" class="mt-16">
-      <template #header>
-        <div class="task-header">
-          <span>
-            当前任务
-            <span class="mono">{{ task.task_id }}</span>
-          </span>
-          <el-tag :type="statusType(task.status)" effect="light" round>
-            {{ statusText(task.status) }}
-          </el-tag>
-        </div>
-      </template>
-
-      <el-progress
-        :percentage="percent"
-        :status="task.status === 'failed' ? 'exception' : task.status === 'done' ? 'success' : undefined"
-        :stroke-width="18"
-        text-inside
-        :duration="3"
-      />
-
-      <el-row :gutter="12" class="mt-16">
-        <el-col v-for="m in taskMetrics" :key="m.label" :xs="12" :sm="6">
-          <div class="metric">
-            <div class="metric-label">{{ m.label }}</div>
-            <div class="metric-value">{{ m.value }}</div>
-          </div>
-        </el-col>
-      </el-row>
-
-      <el-alert
-        class="mt-16"
-        :title="task.message"
-        :type="task.status === 'failed' ? 'error' : task.status === 'done' ? 'success' : 'info'"
-        show-icon
-        :closable="false"
-      />
-
-      <div v-if="task.status === 'done' && task.entities > 0" class="mt-16">
-        <el-button type="primary" :icon="Search" @click="$router.push('/task1/entities')">
-          前往「标的物检索」查看提取结果
-        </el-button>
-      </div>
+    <el-card v-if="task" class="mt-16" shadow="never"><template #header>{{ statusText(task.status) }} · {{ task.task_id }}</template>
+      <p>阶段：{{ task.phase }}；公告 {{ task.done || 0 }}/{{ task.total || 0 }}；基础记录 {{ task.entities || 0 }}；附件明细 {{ task.detail_entities || 0 }}</p>
+      <el-progress :percentage="Math.min(100,task.total?Math.round(task.done/task.total*100):0)"/>
+      <p>上游模型预留调用：{{ task.model_ledger?.calls_reserved || 0 }}；用量未知的调用：{{ task.model_ledger?.unknown_usage_attempts || 0 }}；离线关系构建调用：0（不代表上游0调用）。</p>
+      <el-alert v-if="task.status==='partial'" title="仅部分成功；下载失败清单和原始结果核对，不能当完整成功。" type="warning" :closable="false"/>
+      <el-alert v-if="task.status==='needs_confirmation'" title="存在不确定模型请求，禁止自动重发；需管理员核对请求及账单。" type="warning" :closable="false"/>
+      <pre v-if="task.diagnostics?.length">{{ JSON.stringify(task.diagnostics,null,2) }}</pre>
+      <el-button @click="reconnect">重新连接进度</el-button><el-button @click="cancel">取消服务器任务</el-button>
+      <el-button v-if="['failed','cancelled'].includes(task.status)" @click="retry">明确重试（不重置费用预算）</el-button>
+      <el-button v-if="task.mode==='extract' && ['completed','partial'].includes(task.status)" type="primary" @click="openResults">查看这个批次的实体及关系</el-button>
+      <div v-if="['completed','partial','validated_only'].includes(task.status)"><el-button v-for="name in ['standard.xlsx','raw_results.json','errors.json','errors.csv']" :key="name" @click="download(name)">下载{{ name }}</el-button></div>
     </el-card>
-
-    <el-card shadow="never" class="mt-16">
-      <template #header>
-        <span>处理历史</span>
-        <el-button link type="primary" :icon="Refresh" @click="loadTasks">刷新</el-button>
-      </template>
-
-      <el-table :data="tasks" stripe v-if="tasks.length">
-        <el-table-column prop="task_id" label="任务ID" width="130">
-          <template #default="{ row }">
-            <span class="mono">{{ row.task_id }}</span>
-          </template>
-        </el-table-column>
-
-        <el-table-column prop="status" label="状态" width="106">
-          <template #default="{ row }">
-            <el-tag :type="statusType(row.status)" effect="light" size="small" round>
-              {{ statusText(row.status) }}
-            </el-tag>
-          </template>
-        </el-table-column>
-
-        <el-table-column label="进度" width="150">
-          <template #default="{ row }">
-            <div class="mini-progress">
-              <el-progress
-                :percentage="row.total ? Math.round((row.done / row.total) * 100) : 0"
-                :stroke-width="6"
-                :show-text="false"
-                :color="row.status === 'failed' ? '#ef4444' : undefined"
-              />
-              <span class="mini-text">{{ row.done }}/{{ row.total }}</span>
-            </div>
-          </template>
-        </el-table-column>
-
-        <el-table-column prop="entities" label="标的物" width="90" align="right">
-          <template #default="{ row }">
-            <span class="cell-empty" v-if="!row.entities">—</span>
-            <span v-else>{{ row.entities }}</span>
-          </template>
-        </el-table-column>
-
-        <el-table-column prop="message" label="说明" min-width="260" show-overflow-tooltip />
-
-        <el-table-column prop="created_at" label="创建时间" width="170">
-          <template #default="{ row }">
-            <span class="cell-empty">{{ row.created_at?.replace('T', ' ') }}</span>
-          </template>
-        </el-table-column>
-      </el-table>
-
-      <el-empty v-else description="暂无处理记录，上传数据集后将在此显示" />
+    <el-card class="mt-16" shadow="never"><template #header>本人处理历史 <el-button link @click="loadTasks">刷新</el-button></template>
+      <el-table :data="tasks" empty-text="没有本人任务；网络错误会单独提示"><el-table-column prop="task_id" label="任务"/><el-table-column prop="mode" label="模式"/><el-table-column label="状态"><template #default="{row}">{{ statusText(row.status) }}</template></el-table-column><el-table-column prop="entities" label="基础记录"/><el-table-column prop="detail_entities" label="附件明细"/><el-table-column label="操作"><template #default="{row}"><el-button link @click="attach(row)">恢复查看</el-button></template></el-table-column></el-table>
     </el-card>
   </div>
 </template>
-
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
-import { Delete, Refresh, Search, Upload, UploadFilled } from '@element-plus/icons-vue'
-
-import { getTask, listTasks, uploadDataset } from '../api/task3'
-
-const fileList = ref([])
-const runExtraction = ref(false)
-const uploading = ref(false)
-const task = ref(null)
-const tasks = ref([])
-
-let timer = null
-
-const percent = computed(() => {
-  if (!task.value || !task.value.total) return 0
-  return Math.min(100, Math.round((task.value.done / task.value.total) * 100))
-})
-
-const taskMetrics = computed(() => [
-  { label: '公告总数', value: task.value?.total ?? 0 },
-  { label: '已处理', value: task.value?.done ?? 0 },
-  { label: '成功', value: task.value?.success ?? 0 },
-  { label: '提取标的物', value: task.value?.entities ?? 0 },
-])
-
-function statusText(s) {
-  return { pending: '等待中', processing: '处理中', done: '已完成', failed: '失败' }[s] || s
-}
-
-function statusType(s) {
-  return { pending: 'info', processing: 'warning', done: 'success', failed: 'danger' }[s] || 'info'
-}
-
-async function submit() {
-  const fd = new FormData()
-  fileList.value.forEach((f) => {
-    if (f.raw) fd.append('files', f.raw)
-  })
-  fd.append('run_extraction', String(runExtraction.value))
-
-  uploading.value = true
-  try {
-    const created = await uploadDataset(fd)
-    task.value = created
-    ElMessage.success(`已提交，共 ${created.total} 篇公告`)
-    startPolling(created.task_id)
-  } catch (e) {
-    ElMessage.error(e.message)
-  } finally {
-    uploading.value = false
-  }
-}
-
-function startPolling(taskId) {
-  stopPolling()
-  timer = setInterval(async () => {
-    try {
-      const t = await getTask(taskId)
-      task.value = t
-      if (t.status === 'done' || t.status === 'failed') {
-        stopPolling()
-        loadTasks()
-        if (t.status === 'done') ElMessage.success('处理完成')
-        else ElMessage.error(t.message)
-      }
-    } catch (e) {
-      stopPolling()
-      ElMessage.error(e.message)
-    }
-  }, 3000)
-}
-
-function stopPolling() {
-  if (timer) {
-    clearInterval(timer)
-    timer = null
-  }
-}
-
-async function loadTasks() {
-  try {
-    const data = await listTasks()
-    tasks.value = data.items
-  } catch {
-    tasks.value = []
-  }
-}
-
-onMounted(loadTasks)
-onUnmounted(stopPolling)
+import {ref,reactive,computed,onMounted,onUnmounted} from 'vue'
+import {useRoute,useRouter} from 'vue-router'
+import {UploadFilled} from '@element-plus/icons-vue'
+import {getTask,listTasks,beginUpload,resumeUpload,sendPart,completeUpload,cancelTask,retryTask,capabilities} from '../api/task3'
+import {downloadStandard} from '../api/task2'
+import {hashParts,uploadParts} from '../services/chunkUpload'
+import {createTaskPolling,terminalStatuses} from '../services/taskPolling'
+const route=useRoute(),router=useRouter(),fileList=ref([]),runExtraction=ref(false),uploading=ref(false),task=ref(null),tasks=ref([]),error=ref(''),uploadPhase=ref('等待选择文件'),uploadPercent=ref(0),caps=ref({}),budget=reactive({max_calls:8,max_input_tokens:64000,max_output_tokens:32768})
+let controller,requestKey='',receiptTask=''
+const receiving=computed(()=>task.value?.status==='receiving')
+const statusText=status=>({receiving:'接收中',queued:'等待处理',running:'处理中',validating:'验收中',validated_only:'仅解析完成（无实体）',completed:'处理完成',partial:'部分成功',failed:'失败',cancelled:'已取消',needs_confirmation:'需管理员确认'}[status]||status)
+const polling=createTaskPolling({fetch:getTask,onResult:value=>{task.value=value;if(terminalStatuses.has(value.status))loadTasks()},onError:e=>{error.value='进度连接中断：'+e.message+'；任务可能仍在服务器运行，请重新连接。'}})
+function saveReceipt(){sessionStorage.setItem('task3_upload_receipt',JSON.stringify({request_key:requestKey,task_id:receiptTask,mode:runExtraction.value?'extract':'parse_only'}))}
+async function loadTasks(){try{tasks.value=(await listTasks()).items}catch(e){error.value=e.message}}
+async function attach(row){task.value=row;receiptTask=row.task_id;try{if(row.status==='receiving'){const session=await resumeUpload(row.task_id);requestKey=session.request_key;runExtraction.value=row.mode==='extract';saveReceipt()}await router.replace({path:route.path,query:{...route.query,task_id:row.task_id}});polling.start(row.task_id)}catch(e){error.value=e.message}}
+function reconnect(){error.value='';if(task.value)polling.start(task.value.task_id)}
+function newBatch(){polling.stop();task.value=null;requestKey='';receiptTask='';sessionStorage.removeItem('task3_upload_receipt');uploadPercent.value=0}
+async function submit(){error.value='';uploading.value=true;controller=new AbortController();try{
+  const settings=await capabilities();caps.value=settings
+  const files=fileList.value.map(entry=>entry.raw),total=files.reduce((sum,file)=>sum+file.size,0)
+  if(total>settings.received_bytes || files.some(file=>file.size>settings.file_bytes))throw new Error('文件超过服务器总量/单文件限制')
+  const specs=[];let hashed=0
+  for(const file of files){uploadPhase.value='正在分片校验 '+file.name;specs.push(await hashParts(file,settings.chunk_bytes,{signal:controller.signal,onProgress:value=>{uploadPercent.value=Math.round((hashed+value.hashed_bytes)/total*100)}}));hashed+=file.size}
+  requestKey=requestKey||globalThis.crypto.randomUUID()
+  const session=await beginUpload({request_key:requestKey,files:specs,mode:runExtraction.value?'extract':'parse_only',...(runExtraction.value?{budget:{...budget}}:{})})
+  receiptTask=session.job.task_id;task.value=session.job;saveReceipt()
+  await router.replace({path:route.path,query:{...route.query,task_id:receiptTask}})
+  uploadPhase.value='传输分片（已确认部分自动跳过）'
+  const value=await uploadParts(session,files,{signal:controller.signal,sendPart,complete:completeUpload,onProgress:value=>{uploadPercent.value=Math.round(value.uploaded_bytes/value.total_bytes*100)}})
+  task.value=value;uploadPhase.value='上传确认完成；处理进度单独显示';polling.start(value.task_id);await loadTasks()
+}catch(e){error.value=e.message;uploadPhase.value='尚未确认完成；保留服务器断点'}finally{uploading.value=false}}
+async function cancel(){try{task.value=await cancelTask(task.value.task_id);reconnect()}catch(e){error.value=e.message}}
+async function retry(){try{task.value=await retryTask(task.value.task_id);reconnect()}catch(e){error.value=e.message}}
+function openResults(){router.push({path:'/task1/entities',query:{dataset_id:task.value.upload_dataset_id}})}
+async function download(name){try{await downloadStandard(task.value.upload_dataset_id,name)}catch(e){error.value=e.message}}
+onMounted(async()=>{try{caps.value=await capabilities()}catch(e){error.value=e.message}try{const receipt=JSON.parse(sessionStorage.getItem('task3_upload_receipt')||'null');requestKey=receipt?.request_key||'';receiptTask=route.query.task_id||receipt?.task_id||'';runExtraction.value=receipt?.mode==='extract';if(receiptTask){task.value=await getTask(receiptTask);polling.start(receiptTask)}}catch(e){error.value=e.message}await loadTasks()})
+onUnmounted(()=>{controller?.abort();polling.stop()})
 </script>
-
-<style scoped>
-.dropzone :deep(.el-upload-dragger) {
-  padding: 34px 20px;
-  border: 1.5px dashed var(--c-border-strong);
-  border-radius: var(--radius);
-  background: var(--c-surface-2);
-  transition: all 0.2s ease;
-}
-
-.dropzone :deep(.el-upload-dragger:hover) {
-  border-color: var(--c-primary);
-  background: var(--c-primary-soft);
-}
-
-.dropzone :deep(.el-icon--upload) {
-  font-size: 46px;
-  color: var(--c-primary);
-  margin-bottom: 8px;
-}
-
-.actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
-  margin-top: 18px;
-}
-
-.actions-btns {
-  display: flex;
-  gap: 8px;
-}
-
-.task-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.mono {
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
-  font-size: 12.5px;
-  color: var(--c-text-2);
-  margin-left: 4px;
-}
-
-/* 任务指标 */
-.metric {
-  padding: 12px 14px;
-  border-radius: var(--radius-sm);
-  background: var(--c-surface-2);
-  border: 1px solid var(--c-border);
-}
-
-.metric-label {
-  font-size: 12px;
-  color: var(--c-text-3);
-}
-
-.metric-value {
-  font-size: 20px;
-  font-weight: 600;
-  margin-top: 2px;
-  font-variant-numeric: tabular-nums;
-}
-
-/* 历史表内迷你进度 */
-.mini-progress {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.mini-progress :deep(.el-progress) {
-  flex: 1;
-}
-
-.mini-text {
-  font-size: 12px;
-  color: var(--c-text-3);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-</style>
+<style scoped>.mt-16{margin-top:16px}p{color:#526078;line-height:1.7}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f5f7fa;padding:12px}.el-button{margin-top:10px}</style>

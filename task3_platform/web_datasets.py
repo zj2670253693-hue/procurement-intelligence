@@ -24,6 +24,19 @@ def router(provider):
         actor=services.actor(request,guest=True)
         value=strict_json_loads(filters)
         if not isinstance(value,dict) or set(value)-{"text","missing","ranges","quantity_unit"}: raise PlatformError("invalid_entity_filter")
+        from decimal import Decimal
+        import re
+        ranges=value.get("ranges",{})
+        if isinstance(ranges,dict):
+            for field,pair in ranges.items():
+                if isinstance(pair,(list,tuple)):
+                    converted=[]
+                    for bound in pair:
+                        if isinstance(bound,str):
+                            if not re.fullmatch(r"-?[0-9]{1,35}(?:\.[0-9]{1,30})?",bound): raise PlatformError("invalid_range_filter")
+                            bound=Decimal(bound)
+                        converted.append(bound)
+                    ranges[field]=converted
         repository=services.baseline if dataset_id=="official" else services.datasets
         return asdict(repository.search(actor,dataset_id,EntityFilters(**value),page,page_size))
     @api.get("/datasets/{dataset_id}/stats")

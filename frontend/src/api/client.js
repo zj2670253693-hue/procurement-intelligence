@@ -9,6 +9,15 @@ import axios from 'axios'
 const client = axios.create({
   baseURL: import.meta.env.VITE_API_BASE || '/api',
   timeout: 20000,
+  withCredentials: true,
+})
+
+client.interceptors.request.use((request) => {
+  if (typeof document !== 'undefined' && ['post','put','patch','delete'].includes(request.method?.toLowerCase())) {
+    const csrf = document.cookie.split('; ').find(item => item.startsWith('t3_csrf='))?.slice(8)
+    if (csrf) request.headers['X-CSRF-Token'] = decodeURIComponent(csrf)
+  }
+  return request
 })
 
 // 统一剥掉 data 外层，并把错误信息标准化成 Error.message
@@ -22,7 +31,10 @@ client.interceptors.response.use(
         : error.response
           ? `请求失败（HTTP ${error.response.status}）`
           : '无法连接后端服务，请确认后端已启动'
-    return Promise.reject(new Error(message))
+    const normalized = new Error(error.response?.data?.code || message)
+    normalized.status = error.response?.status
+    normalized.code = error.response?.data?.code
+    return Promise.reject(normalized)
   },
 )
 
