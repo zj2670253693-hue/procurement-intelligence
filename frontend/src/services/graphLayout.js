@@ -12,7 +12,7 @@
  */
 
 export const NODE = { width: 208, height: 40, gapX: 96, gapY: 22, paddingX: 14, minWidth: 132 }
-export const LABEL = { height: 18, paddingX: 7, fontSize: 11, radius: 8, offset: 13 }
+export const LABEL = { height: 18, paddingX: 7, fontSize: 11, radius: 8, offset: 13, gap: 4 }
 
 const charWidth = (character) => {
   const code = character.codePointAt(0)
@@ -39,30 +39,46 @@ export function measureChip(label = '') {
 }
 
 const rankNodes = (nodes, edges) => {
-  const outgoing = new Map(nodes.map(node => [node.id, []]))
-  const incoming = new Map(nodes.map(node => [node.id, []]))
+  const order = nodes.map(node => node.id)
+  const outgoing = new Map(order.map(id => [id, []]))
   for (const edge of edges) {
     if (!outgoing.has(edge.from) || !outgoing.has(edge.to)) continue
     outgoing.get(edge.from).push(edge.to)
-    incoming.get(edge.to).push(edge.from)
   }
-  const order = nodes.map(node => node.id)
-  const rank = new Map(order.map(id => [id, 0]))
-  // DFS layering: a back edge to a node already on the current path is skipped, so
-  // a cycle can never drag its own source into a later column.
-  const state = new Map(order.map(id => [id, 'new']))
+  // Pass A: deterministic DFS that records the edges which close a cycle. Those are
+  // the only edges that may legitimately point backwards.
+  const mark = new Map(order.map(id => [id, 'new']))
+  const closers = new Set()
   const visit = (id) => {
-    state.set(id, 'active')
+    mark.set(id, 'active')
     for (const next of outgoing.get(id) || []) {
-      if (state.get(next) === 'active') continue
-      rank.set(next, Math.max(rank.get(next), rank.get(id) + 1))
-      if (state.get(next) === 'new') visit(next)
+      if (mark.get(next) === 'active') closers.add(id + '>' + next)
+      else if (mark.get(next) === 'new') visit(next)
     }
-    state.set(id, 'done')
+    mark.set(id, 'done')
   }
-  for (const id of order) if (state.get(id) === 'new') visit(id)
-  // Sources pin to column 0; everything else keeps its longest incoming distance.
-  for (const id of order) if (!incoming.get(id).length) rank.set(id, 0)
+  for (const id of order) if (mark.get(id) === 'new') visit(id)
+
+  // Pass B: longest-path layering over the acyclic remainder, in a stable order, so
+  // no node can land in a column earlier than the forward edge that reaches it.
+  const forward = edges.filter(edge => outgoing.has(edge.from) && outgoing.has(edge.to)
+    && !closers.has(edge.from + '>' + edge.to))
+  const indegree = new Map(order.map(id => [id, 0]))
+  for (const edge of forward) indegree.set(edge.to, indegree.get(edge.to) + 1)
+  const position = new Map(order.map((id, index) => [id, index]))
+  const sorted = [...order].sort((a, b) => {
+    const difference = indegree.get(a) - indegree.get(b)
+    return difference !== 0 ? difference : position.get(a) - position.get(b)
+  })
+  const rank = new Map(order.map(id => [id, 0]))
+  for (const id of sorted) {
+    for (const edge of forward) {
+      if (edge.from !== id) continue
+      const candidate = rank.get(id) + 1
+      if (candidate > rank.get(edge.to)) rank.set(edge.to, candidate)
+    }
+  }
+  for (const id of order) if (!indegree.get(id)) rank.set(id, 0)
   return rank
 }
 
@@ -88,8 +104,12 @@ export function buildGraphLayout(graph = {}) {
   // own vertical run without being clipped by the next column.
   const kindText = (kind) => graph.kindLabels?.[kind] || ''
   const widestChip = Math.max(0, ...edges.map(edge => measureChip(kindText(edge.kind)).width))
-  // A chip never covers the target box, so the gutter only has to fit a half chip.
-  const gutter = NODE.gapX + (widestChip ? widestChip / 2 + LABEL.offset + 8 : 0)
+  // Gutter layout, left to right: [vertical lanes][gap][chip][clearance]. Reserving a
+  // FULL chip width is what stops long labels from being clipped by the next column.
+  const laneSpan = 18
+  const chipGap = 6
+  const clearance = 6
+  const gutter = NODE.gapX + laneSpan + chipGap + widestChip + clearance
 
   // Column x offsets: each column is as wide as its widest box.
   const columnWidths = new Map()
@@ -132,9 +152,25 @@ export function buildGraphLayout(graph = {}) {
   }
 
   const labelled = new Set()
+  // One vertical lane per edge inside each gutter, so converging edges do not stack
+  // into a single thick line.
+  const lanes = new Map()
+  for (const edge of edges) {
+    const fromColumn = Math.max(0, rank.get(edge.from) || 0)
+    const toColumn = Math.max(0, rank.get(edge.to) || 0)
+    if (toColumn <= fromColumn) continue
+    const key = fromColumn + '->' + toColumn
+    if (!lanes.has(key)) lanes.set(key, [])
+    if (!lanes.get(key).includes(edge.id)) lanes.get(key).push(edge.id)
+  }
+  const laneIndex = new Map()
+  for (const ids of lanes.values()) ids.forEach((id, index) => laneIndex.set(id, index))
+
   const laidOutEdges = edges.map(edge => {
     const from = positions[edge.from]
     const to = positions[edge.to]
+    const fromColumn = Math.max(0, rank.get(edge.from) || 0)
+    const toColumn = Math.max(0, rank.get(edge.to) || 0)
     const startX = from.x + boxes[edge.from].width / 2
     const endX = to.x - boxes[edge.to].width / 2
     // Direction follows real geometry, not rank: a wider box can share a rank and
@@ -145,17 +181,17 @@ export function buildGraphLayout(graph = {}) {
     const showLabel = Boolean(label) && !labelled.has(group)
     if (showLabel) labelled.add(group)
     const chip = showLabel ? measureChip(label) : null
-    const midX = forward ? startX + Math.max(18, (endX - startX) * 0.55) : startX + 18
-    // The chip hangs beside the vertical run (never centred on it, so the edge is
-    // not drawn through its own label). The reserved gutter guarantees it fits.
-    const half = (chip?.width || 0) / 2
-    const gap = 7
-    // Ahead of the vertical run, clamped so the chip clears the target box (its own
-    // right edge may reach the target's left edge, but never past it).
-    const preferred = midX + gap + half
-    const cap = endX + NODE.gapX / 2 - half
-    const lowest = startX + half + 2
-    const labelX = chip ? Math.min(Math.max(preferred, Math.min(lowest, cap)), cap) : (startX + endX) / 2
+    const lane = laneIndex.get(edge.id) || 0
+    let midX
+    if (forward && toColumn > fromColumn) {
+      const gutterStart = columnX.get(fromColumn) + columnWidths.get(fromColumn) / 2
+      midX = gutterStart + 9 + Math.min(lane, 4) * 4
+    } else {
+      midX = startX + 16 + Math.min(lane, 4) * 4
+    }
+    // The chip hugs the target box: its right edge is the inner boundary of the
+    // gutter, so it can never be clipped, and the vertical run sits to its left.
+    const labelX = chip ? endX - clearance - chip.width / 2 : (startX + endX) / 2
     return {
       ...edge,
       kindLabel: label,
@@ -168,6 +204,23 @@ export function buildGraphLayout(graph = {}) {
       labelHeight: chip?.height || 0,
     }
   })
+
+  // Chips from different sources can share a gutter; place them top-down and lift
+  // any that would overlap, so no two labels ever sit on top of each other.
+  const placedChips = []
+  const chipsOverlap = (a, b) => Math.abs(a.labelX - b.labelX) < (a.labelWidth + b.labelWidth) / 2 + LABEL.gap
+    && Math.abs(a.labelY - b.labelY) < (a.labelHeight + b.labelHeight) / 2 + LABEL.gap
+  for (const edge of laidOutEdges) {
+    if (!edge.chip) continue
+    const candidate = { labelX: edge.labelX, labelY: edge.labelY, labelWidth: edge.labelWidth, labelHeight: edge.labelHeight }
+    let level = 0
+    while (level < 6 && placedChips.some(other => chipsOverlap(candidate, other))) {
+      level += 1
+      candidate.labelY = edge.labelY - level * (edge.labelHeight + LABEL.gap)
+    }
+    edge.labelY = candidate.labelY
+    placedChips.push(candidate)
+  }
 
   const width = Math.max(640, ...[...columnX.values()].map(x => x + Math.max(...nodes.map(node => boxes[node.id].width)) / 2 + 24))
   const height = Math.max(240, ...Object.values(positions).map(position => position.y + NODE.height))

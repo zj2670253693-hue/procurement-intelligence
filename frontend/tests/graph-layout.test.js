@@ -117,7 +117,9 @@ test('edge labels are placed off the line and deduplicated per source label', ()
     // The chip hangs beside the vertical run, offset off the line itself.
     assert.ok(edge.labelY < edge.startY && edge.startY - edge.labelY >= 10, 'chip sits above the line')
     assert.ok(edge.labelX - edge.labelWidth / 2 >= edge.startX - 1, 'chip does not cover the source node')
-    assert.ok(edge.labelX + edge.labelWidth / 2 <= edge.endX + NODE.gapX / 2, 'chip never reaches the target box')
+    assert.ok(edge.labelX + edge.labelWidth / 2 <= edge.endX, 'chip is never clipped by the target box')
+    assert.ok(edge.labelX - edge.labelWidth / 2 > edge.midX, 'chip sits to the right of its vertical run')
+    assert.ok(edge.midX > edge.startX && edge.midX < edge.endX, 'the run stays inside the gutter')
     assert.ok(edge.labelY < edge.startY, 'label is offset off the line, not on it')
     assert.ok(edge.labelWidth > 0 && edge.labelHeight > 0, 'label has a measurable box for its backdrop')
     assert.ok(edge.chip && edge.chip.width === edge.labelWidth, 'chip and label agree')
@@ -146,6 +148,32 @@ test('labels are not truncated and long names keep their full text', () => {
   assert.ok(positions.p.x - boxes.p.width / 2 >= 0, 'long box stays inside the canvas')
 })
 
+test('chips never overlap each other, even from different sources', () => {
+  // Two edges into the same column whose chips would otherwise land on top of one
+  // another: one long label from a nearer source, one short label from further away.
+  const crowded = {
+    nodes: [{ id: 'a', kind: 'project', label: '甲项目' },
+            { id: 'b', kind: 'project', label: '乙项目' },
+            { id: 'x', kind: 'event', label: '合同包一' },
+            { id: 'y', kind: 'event', label: '合同包二' },
+            { id: 'z', kind: 'bid_subject', label: '某投标公司' }],
+    edges: [{ id: 'p', from: 'a', to: 'z', kind: 'procured_by' },
+            { id: 'q', from: 'b', to: 'z', kind: 'bid_participation_unknown' },
+            { id: 'r', from: 'x', to: 'y', kind: 'package_of' }],
+  }
+  const { edges } = layout(crowded)
+  const chips = edges.filter(edge => edge.chip)
+  assert.ok(chips.length >= 2, 'fixture must produce at least two chips')
+  for (let i = 0; i < chips.length; i += 1) {
+    for (let j = i + 1; j < chips.length; j += 1) {
+      const a = chips[i]
+      const b = chips[j]
+      const horizontal = Math.abs(a.labelX - b.labelX) < (a.labelWidth + b.labelWidth) / 2
+      const vertical = Math.abs(a.labelY - b.labelY) < (a.labelHeight + b.labelHeight) / 2
+      assert.ok(!(horizontal && vertical), a.id + ' chip overlaps ' + b.id)
+    }
+  }
+})
 test('layout is deterministic and empty input is safe', () => {
   const first = layout()
   const second = layout()
