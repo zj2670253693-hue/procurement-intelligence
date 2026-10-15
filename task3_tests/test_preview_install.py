@@ -55,7 +55,11 @@ HTTP_BLOCK='''server {
 
 
 def render_nginx(release=RELEASE,port=18080,text=None):
-    return load('install_preview').retarget_https_server(text or HTTPS_BLOCK+HTTP_BLOCK,release,port)
+    from pathlib import Path as _Path
+    module=load('install_preview')
+    assert module.retarget_https_server(text or HTTPS_BLOCK+HTTP_BLOCK,_Path(release),port)==\
+        module.retarget_https_server(text or HTTPS_BLOCK+HTTP_BLOCK,release,port)
+    return module.retarget_https_server(text or HTTPS_BLOCK+HTTP_BLOCK,release,port)
 
 
 def test_installer_refuses_unauthorized_non_root_invocation(monkeypatch):

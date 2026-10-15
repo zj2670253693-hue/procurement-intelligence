@@ -226,7 +226,7 @@ def _blocks(text):
 def retarget_https_server(text,release,port):
     if not isinstance(port,int) or isinstance(port,bool) or not 1024<=port<=65535 or port in (8000,80,443):
         fail('preview_loopback_port_required')
-    release=posix_path(release,'absolute_preview_release_required')
+    release=posix_path(posix_text(release),'absolute_preview_release_required')
     no_links(release)
     blocks=_blocks(text)
     https=[item for item in blocks if item[0]==443]
@@ -263,7 +263,7 @@ def retarget_https_server(text,release,port):
 
 
 def release_manifest(release,expected_sha):
-    release=no_links(Path(release))
+    release=no_links(posix_text(release))
     if not release.is_absolute() or not release.is_dir():fail('preview_release_directory_required')
     if not re.fullmatch(r'task3-preview-[A-Za-z0-9._-]+',release.name):fail('preview_release_naming_required')
     manifest=no_links(release/'release-manifest.json')
