@@ -176,6 +176,15 @@ def main():
     bundle = standard_export.project(records, sources)
     bundle, price_changes = price_projection.project_prices(bundle, records, bundle["name_metadata_joins"],
                          lambda aid: _source_prices(aid, sources[aid], html_by_id[aid]))
+    for row in bundle["tables"]["总表"]:
+        # 中标金额 goes through the same money_wan() as 单价/总价, so it is 万元 too, but
+        # the frozen column name cannot carry a unit. State it per row instead, so a
+        # reader never has to guess whether 358.80 means 元 or 万元.
+        if row.get("中标金额"):
+            row["备注"] = (row.get("备注") or "").strip("；")
+            note = "中标金额按万元计"
+            if note not in row["备注"]:
+                row["备注"] = (row["备注"] + "；" + note).strip("；")
     for row in bundle["tables"]["标的表"]:
         row["证据来源"] = row["证据来源"].replace("V12基础结果；未逐项核实", "本批上传抽取结果；未逐项核实")
         # standard_export normalises money to 万元 (元 -> scaleb -4). Without stating
@@ -233,7 +242,7 @@ def main():
               "row_counts": {name: len(rows) for name, rows in bundle["tables"].items()},
               "input_count": len(request["sources"]), "successful_records": len(records),
               "incomplete": bool(errors), "saved_workbook_verified": True,
-              "amount_units": {"单价": "万元", "总价": "万元", "报价（万元）": "万元",
+              "amount_units": {"单价": "万元", "总价": "万元", "中标金额": "万元", "报价（万元）": "万元",
                                "note": "原文金额已按平台规范换算；原文值保留在 raw_results.json"},
               "numeric_precision": "exact_decimal_text_in_original_OOXML", "excel_resave_precision_warning": "Excel may round beyond 15 significant digits; retain original outputs"}
     _write(destination / "export_report.json", canonical_bytes(report))

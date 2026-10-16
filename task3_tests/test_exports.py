@@ -90,7 +90,9 @@ def test_uploaded_plain_html_preserves_explicit_summary_metadata(platform_module
     assert row["中标金额"] == "1.23"
     assert row["标段/合同包"] == "合同包1"
     assert row["UUID"] == inputs[0].announcement_id + "_01"
-    assert row["备注"] == ""
+    # The unit must be stated: 中标金额 goes through the same 万元 normalisation as
+    # 单价/总价, and the frozen column name cannot carry a unit of its own.
+    assert row["备注"] == "中标金额按万元计"
     assert json.loads((task.exports / "raw_results.json").read_bytes()) == records
 
 
