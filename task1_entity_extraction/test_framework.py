@@ -1,4 +1,9 @@
-"""快速测试脚本：验证框架各模块是否正常工作"""
+"""快速测试脚本：验证框架各模块是否正常工作。
+
+上传 ZIP 回归现由 task3_tests/test_uploads.py 中的以下用例覆盖：
+test_outer_zip_pairs_and_aggregate_limits、test_canonical_htm_and_same_name_attachment、
+test_zip_and_pair_limits；它们通过当前隔离上传服务验证规范公告 ID、附件配对和限额。
+"""
 import sys
 import json
 import tempfile
@@ -119,7 +124,7 @@ def test_html_parser():
     print("\n=== 2. 测试 HTML 解析 ===")
     from data_loader.html_parser import HTMLAnnouncementParser
     parser = HTMLAnnouncementParser()
-    content = parser.parse_file("sample_data/sample_announcement.html")
+    content = parser.parse_file(Path(__file__).resolve().parent / "sample_data/sample_announcement.html")
     print(f"  公告ID: {content.announcement_id}")
     print(f"  标题: {content.title[:40]}...")
     print(f"  文本长度: {len(content.html_text)} 字符")
@@ -157,7 +162,7 @@ def test_evaluation():
         )
     ]
 
-    with open("sample_data/ground_truth_sample.json", "r", encoding="utf-8") as f:
+    with (Path(__file__).resolve().parent / "sample_data/ground_truth_sample.json").open("r", encoding="utf-8") as f:
         ground_truths = json.load(f)
 
     # 故意加入一篇完全缺失的预测，验证它会计入 FN，而不是被评测器忽略。
@@ -215,34 +220,6 @@ def test_entity_deduplication():
     deduplicated = LLMExtractor._deduplicate_entities(entities)
     assert len(deduplicated) == 2
     print("  ✅ 完全重复行已删除，数量不同的真实记录被保留")
-
-
-def test_dataset_zip_detection():
-    print("\n=== 7. 测试官方双压缩包识别 ===")
-    from api.routers.task3 import _classify_zip, _extract_dataset_archive
-
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        html_archive = root / "html.zip"
-        attachment_archive = root / "file.zip"
-        single_attachment = root / "one.zip"
-        output = root / "out"
-        output.mkdir()
-
-        with zipfile.ZipFile(html_archive, "w") as zf:
-            zf.writestr("nested/a.html", "<html>公告</html>")
-        with zipfile.ZipFile(attachment_archive, "w") as zf:
-            zf.writestr("a.zip", b"a")
-            zf.writestr("b.zip", b"b")
-        with zipfile.ZipFile(single_attachment, "w") as zf:
-            zf.writestr("报价明细.pdf", b"pdf")
-
-        assert _classify_zip(html_archive) == "dataset"
-        assert _classify_zip(attachment_archive) == "dataset"
-        assert _classify_zip(single_attachment) == "attachment"
-        assert _extract_dataset_archive(html_archive, output) == 1
-        assert (output / "a.html").exists()
-    print("  ✅ HTML 外层包、附件外层包与单篇附件包可正确区分")
 
 
 def test_pipeline_attachment_tables_and_failure_callback():
@@ -406,7 +383,6 @@ if __name__ == "__main__":
         test_prompts()
         test_database_schema()
         test_entity_deduplication()
-        test_dataset_zip_detection()
         test_pipeline_attachment_tables_and_failure_callback()
         test_pipeline_checkpoint_resume()
         test_attachment_content_detection_and_pdf_sampling()
