@@ -147,8 +147,13 @@
         </el-tab-pane>
         <el-tab-pane label="附件明细（待核实）" name="details">
           <el-alert title="这些附件记录可能是采购计划或预算，尚未逐条确认为实际中标，不能当作已发生的交易。" type="warning" :closable="false" />
+          <el-alert v-if="attachmentDetails.error" :title="attachmentDetails.error" type="error" :closable="false" />
+          <el-button v-if="attachmentDetails.error" @click="detailsPager.retry()">重试本页</el-button>
           <p>解析状态：{{ attachmentDetails.detail_status || '未知' }}；{{ attachmentDetails.detail_error_message }}</p>
-          <el-table :data="attachmentDetails.items" stripe max-height="600"><el-table-column v-for="c in detailColumns" :key="c.prop" :prop="c.prop" :label="c.label" min-width="160" /></el-table>
+          <el-table v-loading="attachmentDetails.loading" :data="attachmentDetails.items" stripe max-height="600"><el-table-column v-for="c in detailColumns" :key="c.prop" :prop="c.prop" :label="c.label" min-width="160" /></el-table>
+          <p aria-live="polite">共 {{ attachmentDetails.total }} 条；当前第 {{ attachmentDetails.page }} 页，每页 {{ attachmentDetails.pageSize }} 条</p>
+          <el-pagination layout="total, prev, pager, next" :total="attachmentDetails.total" :page-size="attachmentDetails.pageSize"
+            :current-page="attachmentDetails.page" @update:current-page="detailsPager.load" />
         </el-tab-pane>
         <!-- 页签 1：提取结果 -->
         <el-tab-pane :label="`提取结果 (${drawer.rows.length})`" name="entities">
@@ -173,15 +178,23 @@
 
         <!-- 页签 2：公告原文 -->
         <el-tab-pane label="公告原文" name="html">
-          <div v-loading="drawer.loading" class="doc-wrap">
+          <div v-loading="drawer.sourceLoading" class="doc-wrap">
+            <el-alert v-if="drawer.sourceError" :title="drawer.sourceError" type="error" :closable="false" />
+            <el-button v-if="drawer.sourceError" @click="retrySource">重新读取原文</el-button>
             <pre v-if="announcement?.html_text" class="doc-text">{{ announcement.html_text }}</pre>
-            <el-empty v-else description="未获取到公告原文" />
+            <el-empty v-else-if="!drawer.sourceLoading && !drawer.sourceError" description="原文内容为空" />
           </div>
         </el-tab-pane>
 
         <!-- 页签 3：附件 -->
-        <el-tab-pane :label="`附件 (${announcement?.attachment_files.length || 0})`" name="attachments">
+        <el-tab-pane :label="`附件 (${announcement ? announcement.attachment_files.length : '待核验'})`" name="attachments">
           <div v-loading="drawer.attLoading" class="doc-wrap">
+            <el-alert v-if="drawer.sourceError" :title="drawer.sourceError" type="error" :closable="false" />
+            <el-button v-if="drawer.sourceError" @click="retrySource">重新读取附件清单</el-button>
+            <el-button v-if="announcement?.attachment_files.length" type="primary" :loading="drawer.downloading" @click="downloadArchive">下载原始附件 ZIP</el-button>
+            <el-alert v-if="drawer.downloadError" :title="drawer.downloadError" type="error" :closable="false" />
+            <el-alert v-if="drawer.attError" :title="drawer.attError" type="error" :closable="false" />
+            <el-button v-if="drawer.attError" @click="loadAttachments">重新读取附件目录</el-button>
             <el-alert
               v-if="drawer.attMessage"
               :title="drawer.attMessage"
@@ -202,8 +215,8 @@
             </el-collapse>
 
             <el-empty
-              v-else-if="!drawer.attLoading && !drawer.attMessage"
-              description="该公告没有附件包"
+              v-else-if="drawer.attLoaded && !drawer.attLoading && !drawer.attMessage && !drawer.attError && !drawer.sourceError"
+              :description="announcement?.attachment_files.length ? '附件暂无可预览文本，请下载原始附件 ZIP 查看' : '该公告没有附件包'"
             />
           </div>
         </el-tab-pane>
@@ -213,8 +226,9 @@
 </template>
 
 <script setup>
-import { watch, reactive, ref } from 'vue'
+import { watch, reactive, ref, onUnmounted } from 'vue'
 import { useDataset } from '../services/useDataset'
+import { createDetailPagination } from '../services/detailPagination'
 const {datasetId,context}=useDataset()
 import { ElMessage } from 'element-plus'
 import { Close, RefreshLeft, Search, View } from '@element-plus/icons-vue'
@@ -222,6 +236,7 @@ import { Close, RefreshLeft, Search, View } from '@element-plus/icons-vue'
 import {
   getAnnouncement,
   getAnnouncementAttachments,
+  getAnnouncementArchive,
   getEntitiesByAnnouncement,
   searchEntities,
   getStandardItems, getOfficialNotes, getAttachmentDetails,
@@ -270,15 +285,22 @@ const drawer = reactive({
   attLoading: false,
   attLoaded: false,
   attMessage: '',
+  attError: '',
+  sourceLoading: false,
+  sourceError: '',
+  downloading: false,
+  downloadError: '',
 })
 
 const announcement = ref(null)
 const attachmentItems = ref([])
 const standardItems = ref({headers: [], items: []})
 const officialNotes = ref('')
-const attachmentDetails = ref({items: []})
+const attachmentDetails = reactive({})
+const detailsPager = createDetailPagination({ fetch: getAttachmentDetails, state: attachmentDetails,
+  accepts: (scope, value) => drawer.visible && drawer.id === scope.announcementId && datasetId.value === scope.datasetId && context.accept(scope.ticket, value) })
 const detailColumns = [{prop:'package_name',label:'采购包'}, ...columns, {prop:'source_file',label:'来源附件'},{prop:'source_page',label:'页号'}]
-let drawerGeneration = 0
+let drawerGeneration = 0, sourceGeneration = 0
 
 async function load() {
   const ticket=context.ticket(),token=++loadGeneration
@@ -341,27 +363,31 @@ async function openAnnouncement(id) {
   drawer.attLoading = false
   drawer.attLoaded = false
   drawer.attMessage = ''
+  drawer.attError = ''
+  drawer.sourceError = ''
+  drawer.sourceLoading = true
+  drawer.downloading = false
+  drawer.downloadError = ''
   announcement.value = null
   attachmentItems.value = []
   standardItems.value={headers: [], items: []}
   officialNotes.value=''
-  attachmentDetails.value={items: []}
+  detailsPager.select({announcementId:id,datasetId:ticket.dataset_id,ticket})
+  detailsPager.load(1)
 
   try {
     // 标的物与公告原文并行取，原文失败不影响表格展示
-    const [ents, ann, standard, notes, details] = await Promise.all([
-      getEntitiesByAnnouncement(id,ticket.dataset_id),
-      getAnnouncement(id,ticket.dataset_id).catch(() => null),
+    const source = readSource(id,ticket,token)
+    const [ents, , standard, notes] = await Promise.all([
+      ticket.dataset_id === 'official' ? getEntitiesByAnnouncement(id,ticket.dataset_id) : source.then(value=>({items:value.result.entities})),
+      source.catch(() => null),
       getStandardItems(id,ticket.dataset_id).catch(e => ({headers:[],items:[],error:e.message})),
-      getOfficialNotes(id,ticket.dataset_id).catch(e => ({error:e.message})),
-      getAttachmentDetails(id,ticket.dataset_id).catch(e => ({items:[],detail_error_message:e.message})),
+      (ticket.dataset_id === 'official' ? getOfficialNotes(id,ticket.dataset_id) : source.then(value=>({notes:value.result.extra_info,note:'预算/需求/意向不能混成已发生交易。'}))).catch(e => ({error:e.message})),
     ])
     if(token!==drawerGeneration || !context.accept(ticket))return
-    drawer.rows = ents.items
-    announcement.value = ann
+    if(ticket.dataset_id === 'official')drawer.rows = ents.items
     standardItems.value=standard
-    officialNotes.value=JSON.stringify(notes, null, 2)
-    attachmentDetails.value=details
+    if(ticket.dataset_id === 'official')officialNotes.value=JSON.stringify(notes, null, 2)
   } catch (e) {
     if(token===drawerGeneration)drawer.error = e.message
   } finally {
@@ -370,25 +396,76 @@ async function openAnnouncement(id) {
 }
 
 async function onTabChange(name) {
-  const ticket=context.ticket()
   // 附件解析较慢，首次切到该页签时才加载
   if (name !== 'attachments' || drawer.attLoaded) return
-  drawer.attLoaded = true
+  await loadAttachments()
+}
+
+async function loadAttachments() {
+  const ticket=context.ticket()
+  drawer.attLoaded = false
   drawer.attLoading = true
+  drawer.attError = ''
   const token=drawerGeneration
   try {
     const data = await getAnnouncementAttachments(drawer.id,ticket.dataset_id)
     if(token!==drawerGeneration || !context.accept(ticket,data))return
     attachmentItems.value = data.items || []
     drawer.attMessage = data.message || ''
+    drawer.attLoaded = true
   } catch (e) {
-    if(token===drawerGeneration)drawer.attMessage = e.message
+    if(token===drawerGeneration && context.accept(ticket))drawer.attError = '附件目录读取失败：'+e.message
   } finally {
     if(token===drawerGeneration)drawer.attLoading = false
   }
 }
 
-watch(datasetId,id=>{context.select(id);loadGeneration++;drawerGeneration++;drawer.visible=false;drawer.loading=false;drawer.attLoading=false;rows.value=[];total.value=0;announcement.value=null;attachmentItems.value=[];standardItems.value={headers:[],items:[]};officialNotes.value='';attachmentDetails.value={items:[]};query.page=1;load()},{immediate:true})
+async function readSource(id,ticket,token) {
+  const request=++sourceGeneration
+  const current=value=>request===sourceGeneration && token===drawerGeneration && drawer.visible && drawer.id===id && datasetId.value===ticket.dataset_id && context.accept(ticket,value)
+  drawer.sourceError='';drawer.sourceLoading=true
+  try {
+    const value=await getAnnouncement(id,ticket.dataset_id)
+    if(current(value)) {
+      announcement.value=value
+      if(ticket.dataset_id!=='official') {
+        drawer.rows=value.result.entities
+        officialNotes.value=JSON.stringify({notes:value.result.extra_info,note:'预算/需求/意向不能混成已发生交易。'},null,2)
+        drawer.error=''
+      }
+    }
+    return value
+  } catch(e) {
+    if(current())drawer.sourceError='原文及附件清单读取失败：'+e.message
+    throw e
+  } finally {
+    if(current())drawer.sourceLoading=false
+  }
+}
+
+async function retrySource() {
+  try { await readSource(drawer.id,context.ticket(),drawerGeneration) } catch { /* readSource exposes the failure next to the retry button. */ }
+}
+
+async function downloadArchive() {
+  const ticket=context.ticket(),token=drawerGeneration,id=drawer.id
+  drawer.downloading=true;drawer.downloadError=''
+  try {
+    const blob=await getAnnouncementArchive(id,ticket.dataset_id)
+    if(token!==drawerGeneration || !drawer.visible || !context.accept(ticket))return
+    const url=URL.createObjectURL(blob),link=document.createElement('a')
+    link.href=url;link.download=id+'.zip';link.click()
+    setTimeout(()=>URL.revokeObjectURL(url),0)
+  } catch(e) {
+    if(token===drawerGeneration && context.accept(ticket))drawer.downloadError='附件下载失败：'+e.message
+  } finally {
+    if(token===drawerGeneration)drawer.downloading=false
+  }
+}
+
+watch(()=>drawer.visible,visible=>{if(!visible){drawerGeneration++;detailsPager.cancel();drawer.loading=false;drawer.sourceLoading=false;drawer.attLoading=false;drawer.downloading=false}},{flush:'sync'})
+watch(datasetId,id=>{context.select(id);loadGeneration++;drawerGeneration++;detailsPager.cancel();drawer.visible=false;drawer.loading=false;drawer.attLoading=false;rows.value=[];total.value=0;announcement.value=null;attachmentItems.value=[];standardItems.value={headers:[],items:[]};officialNotes.value='';query.page=1;load()},{immediate:true})
+onUnmounted(()=>{loadGeneration++;drawerGeneration++;detailsPager.cancel()})
 </script>
 
 <style scoped>

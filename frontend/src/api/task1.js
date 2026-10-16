@@ -38,16 +38,16 @@ export function getEntitiesByAnnouncement(announcementId,dataset='official') {
 
 /** 查看公告原文（HTML 正文 + 附件文件清单） */
 export function getAnnouncement(announcementId,dataset='official') {
-  if(dataset!=='official') return client.get(`/platform/datasets/${dataset}/announcements/${encodeURIComponent(announcementId)}`).then(value=>({...value,attachment_files:value.attachments,html_length:value.html_text.length,source_exists:true}))
-  return client.get(`/announcements/${announcementId}`)
+  return client.get(`/platform/datasets/${dataset}/announcements/${encodeURIComponent(announcementId)}`).then(value=>({...value,attachment_files:value.attachments,html_length:value.html_text.length,source_exists:true}))
 }
 
 /** 按需加载公告附件文本（解析较慢，切到附件页签时再调） */
 export function getAnnouncementAttachments(announcementId,dataset='official') {
-  if(dataset!=='official') return client.get(`/platform/datasets/${dataset}/announcements/${encodeURIComponent(announcementId)}/attachments`)
-  return client.get(`/announcements/${announcementId}/attachments`)
+  return client.get(`/platform/datasets/${dataset}/announcements/${encodeURIComponent(announcementId)}/attachments`)
 }
+
+export const getAnnouncementArchive = (id,dataset='official') => client.get(`/platform/datasets/${dataset}/announcements/${encodeURIComponent(id)}/attachments/download`, { responseType: 'blob' })
 
 export const getStandardItems = (id,dataset='official') => dataset==='official'?client.get(`/task1/standard-items/${encodeURIComponent(id)}`):client.get(`/platform/datasets/${dataset}/artifacts/standard_projection.json`).then(value=>({headers:value.headers['标的表'],items:value.tables['标的表'].filter(row=>row['原公告ID']===id)}))
 export const getOfficialNotes = (id,dataset='official') => dataset==='official'?client.get(`/task1/official-notes/${encodeURIComponent(id)}`):getAnnouncement(id,dataset).then(value=>({notes:value.result.extra_info,note:'预算/需求/意向不能混成已发生交易。'}))
-export const getAttachmentDetails = (id,dataset='official') => client.get(dataset==='official'?`/entities/${encodeURIComponent(id)}/details`:`/platform/datasets/${dataset}/announcements/${encodeURIComponent(id)}/details`)
+export const getAttachmentDetails = (id,dataset='official',params={page:1,page_size:100}) => client.get(`/platform/datasets/${dataset}/announcements/${encodeURIComponent(id)}/details`, { params })
