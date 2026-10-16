@@ -28,6 +28,9 @@
     <template v-if="result">
       <el-card shadow="never" class="mt-16">
         <template #header><span>查询结果（{{ result.total }} 条）</span><span v-if="result.project_count !== undefined" class="version">涉及 {{ result.project_count }} 个项目</span></template>
+        <el-alert v-if="unclearEdges.unknown" type="warning" :closable="false" show-icon class="mt-16"
+          :title="`本次关系图里有 ${unclearEdges.unknown} 条投标记录的结果未明确。`"
+          :description="`这些公告只披露了参与投标的名单，没有可确认归属的中标结果，因此平台标记为“投标·结果未明确”。未披露不等于未中标，平台不做这种推断；可点开对应关系线查看原文。` + (unclearEdges.won ? ` 本次另有 ${unclearEdges.won} 条有原文依据的中标关系已标出。` : '')" />
         <el-table :data="result.items" stripe empty-text="没有符合原文证据条件的记录；不代表实际不存在合作或竞标。">
           <el-table-column :label="type === 'common_projects' ? '项目名称' : type === 'common_buyers' ? '采购单位' : '供应商 / 投标方'" min-width="240"><template #default="{ row }">{{ row.name || row.project_name }}</template></el-table-column>
           <el-table-column v-if="type === 'buyer_suppliers'" label="角色" width="135"><template #default="{ row }">{{ row.role === 'product_supplier' ? '产品供应商' : '中标供应商' }}</template></el-table-column>
@@ -94,6 +97,16 @@ let generation=0,choiceGeneration=0
 const secondaryPage=ref(1)
 const display=v=>v === null || v === undefined ? '未明确' : v
 const outcomes={won:'中标',lost:'明确未中标',unknown:'未知',mixed:'多个包结果不同'}
+// 说明必须贴着结果出现：只披露参与名单、没有可归属中标结果的公告会让图上连着几条
+// “投标·结果未明确”，看起来像故障，实际是刻意不推断。计数取图谱里真实的边类型。
+const unclearEdges=computed(()=>{
+  const edges=result.value?.graph?.edges||[]
+  return {
+    unknown:edges.filter(edge=>edge.kind==='bid_participation_unknown').length,
+    won:edges.filter(edge=>edge.kind==='bid_participation_won').length,
+    lost:edges.filter(edge=>edge.kind==='bid_participation_lost').length,
+  }
+})
 async function loadChoices(term='') { const token=++choiceGeneration,ticket=context.ticket();choicesLoading.value=true;try {const data=await organizationChoices({role:buyerMode.value?'buyer':'winner',term,dataset_id:status.value?.dataset_id},ticket.dataset_id);if(token===choiceGeneration && context.accept(ticket))choices.value=data.items} catch(e){if(token===choiceGeneration && context.accept(ticket))ElMessage.error(e.message)}finally{if(token===choiceGeneration && context.accept(ticket))choicesLoading.value=false} }
 async function changeScenario(){meter.cancel(generation);generation++;evidenceGeneration++;drawer.value=false;evidence.value=null;lastSample.value=null;loading.value=false;result.value=null;selector.value='';selectors.value=[];page.value=1;secondaryPage.value=1;await loadChoices('')}
 function search(){page.value=1;secondaryPage.value=1;run()}
